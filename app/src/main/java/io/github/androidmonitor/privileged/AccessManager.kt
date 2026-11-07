@@ -111,10 +111,8 @@ class AccessManager(private val context: Context, private val settings: Settings
                 if (hasShizukuPermission()) bindShizuku()
             }
             AccessMode.STANDARD -> {
-                if (!hasShizukuPermission()) {
+                if (!hasShizukuPermission() && RootShell.isSuBinaryPresent()) {
                     useRoot()
-                } else {
-                    _state.update { it.copy(root = RootStatus.AVAILABLE) }
                 }
             }
         }
@@ -125,7 +123,7 @@ class AccessManager(private val context: Context, private val settings: Settings
         refreshShizukuStatus()
         if (settings.preferredAccess == AccessMode.ROOT && shell == null && _state.value.root != RootStatus.CHECKING) {
             useRoot()
-        } else if (_state.value.mode == AccessMode.STANDARD && _state.value.root != RootStatus.CHECKING && !hasShizukuPermission()) {
+        } else if (settings.preferredAccess == AccessMode.STANDARD && _state.value.root == RootStatus.UNKNOWN && !hasShizukuPermission() && RootShell.isSuBinaryPresent()) {
             useRoot()
         }
     }
@@ -145,6 +143,7 @@ class AccessManager(private val context: Context, private val settings: Settings
     }
 
     fun useRoot() {
+        if (_state.value.root == RootStatus.CHECKING) return
         _state.update { it.copy(root = RootStatus.CHECKING) }
         scope.launch {
             val opened = RootShell.open()

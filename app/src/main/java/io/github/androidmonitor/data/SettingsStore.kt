@@ -54,6 +54,14 @@ class SettingsStore(context: Context) {
     private val _notificationEnabled = MutableStateFlow(prefs.getBoolean(KEY_NOTIFICATION_ENABLED, false))
     val notificationEnabled: StateFlow<Boolean> = _notificationEnabled.asStateFlow()
 
+    private val _compactProcesses = MutableStateFlow(prefs.getBoolean(KEY_COMPACT_PROCESSES, false))
+    val compactProcesses: StateFlow<Boolean> = _compactProcesses.asStateFlow()
+
+    fun setCompactProcesses(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_COMPACT_PROCESSES, enabled) }
+        _compactProcesses.value = enabled
+    }
+
     fun setRefreshMs(value: Long) {
         prefs.edit { putLong(KEY_REFRESH_MS, value) }
         _refreshMs.value = value
@@ -140,5 +148,6 @@ class SettingsStore(context: Context) {
         private const val KEY_OVERLAY_SCALE = "overlay_scale"
         private const val KEY_OVERLAY_OPACITY = "overlay_opacity"
         private const val KEY_NOTIFICATION_ENABLED = "notification_enabled"
+        private const val KEY_COMPACT_PROCESSES = "compact_processes"
     }
 }

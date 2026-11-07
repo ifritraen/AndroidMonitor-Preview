@@ -29,10 +29,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
@@ -57,6 +60,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -426,17 +430,59 @@ private fun OverlayContent(
     onClose: () -> Unit,
     onDrag: (Float, Float) -> Unit,
 ) {
-    val containerBg = Color(0xEE141414).copy(alpha = opacity.coerceIn(0.25f, 1.0f))
+    val containerBg = Color(0xF2121212).copy(alpha = opacity.coerceIn(0.25f, 1.0f))
     val borderColor = Color(0x38FFFFFF)
+    var minimizedMetricIndex by remember { mutableStateOf(0) }
+
+    // Prepare current metrics based on overlay type
+    val targetProcess = remember(processes, singleProcessKey) {
+        processes.firstOrNull { it.key == singleProcessKey }
+            ?: processes.firstOrNull { it.isApp }
+            ?: processes.firstOrNull()
+    }
+
+    val cpuStr: String
+    val gpuStr: String
+    val memStr: String
+
+    when (overlayType) {
+        OverlayType.RESOURCE_HUD -> {
+            cpuStr = "C:${formatPercent(snapshot?.cpu?.usage)}"
+            gpuStr = "G:${snapshot?.gpu?.usage?.let(::formatPercent) ?: "0%"}"
+            memStr = snapshot?.memory?.let { formatBytes(it.usedBytes) } ?: "0 MB"
+        }
+        OverlayType.TOP_PROCESSES -> {
+            val top = processes.firstOrNull { it.isApp } ?: processes.firstOrNull()
+            cpuStr = "C:${formatPercentFine(top?.cpu ?: 0f)}"
+            gpuStr = "G:${if ((top?.gpu ?: 0f) > 0f) formatPercentFine(top!!.gpu) else "0%"}"
+            memStr = top?.let { formatBytes(it.rssBytes) } ?: "0 MB"
+        }
+        OverlayType.SINGLE_PROCESS -> {
+            cpuStr = "C:${formatPercentFine(targetProcess?.cpu ?: 0f)}"
+            gpuStr = "G:${if ((targetProcess?.gpu ?: 0f) > 0f) formatPercentFine(targetProcess!!.gpu) else "0%"}"
+            memStr = targetProcess?.let { formatBytes(it.rssBytes) } ?: "0 MB"
+        }
+    }
 
     if (isMinimized) {
-        // Ultra-compact minimized pill (e.g. ⠿ CPU 14% ✕)
+        // Minimized mode: C:X% + X (clicking C:X% cycles to G:Y% and again Z MB)
+        val activeMetricStr = when (minimizedMetricIndex % 3) {
+            0 -> cpuStr
+            1 -> gpuStr
+            else -> memStr
+        }
+        val activeMetricColor = when (minimizedMetricIndex % 3) {
+            0 -> Color(0xFF40C4FF)
+            1 -> Color(0xFFFF80AB)
+            else -> Color(0xFF69F0AE)
+        }
+
         Row(
             modifier = Modifier
-                .height(28.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .height(26.dp)
+                .clip(RoundedCornerShape(13.dp))
                 .background(containerBg)
-                .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(13.dp))
                 .pointerInput(Unit) {
                     detectDragGestures { change, dragAmount ->
                         change.consume()
@@ -447,208 +493,281 @@ private fun OverlayContent(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            // Metric text (tappable to cycle)
             Text(
-                "⠿",
-                color = Color(0xFFAAAAAA),
-                fontSize = 12.sp,
+                activeMetricStr,
+                color = activeMetricColor,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
+                modifier = Modifier.clickable {
+                    minimizedMetricIndex = (minimizedMetricIndex + 1) % 3
+                },
             )
-            Row(
-                modifier = Modifier.clickable { onToggleMinimize() },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("CPU ", color = Color(0xFF4FC3F7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                Text(formatPercent(snapshot?.cpu?.usage), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            }
+
+            // "+" Expand button
             Box(
                 modifier = Modifier
-                    .size(16.dp)
+                    .size(18.dp)
                     .clip(CircleShape)
-                    .background(Color(0x28FFFFFF))
+                    .background(Color(0x30FFFFFF))
+                    .clickable { onToggleMinimize() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("+", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            // "X" Close button
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x30FFFFFF))
                     .clickable { onClose() },
                 contentAlignment = Alignment.Center,
             ) {
-                Text("✕", color = Color(0xFFE0E0E0), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                Text("✕", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
         }
         return
     }
 
-    // Sleek thin ticker strip
-    Row(
-        modifier = Modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(17.dp))
-            .background(containerBg)
-            .border(1.dp, borderColor, RoundedCornerShape(17.dp))
-            .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onDrag(dragAmount.x, dragAmount.y)
-                }
+    // Expanded Overlay Modes
+    when (overlayType) {
+        OverlayType.TOP_PROCESSES -> {
+            // TOP: Max 3 lines, vertically scrollable. Format: {Name}: C:X% G:Y% Z MB [S]
+            val topList = remember(processes, topCount) {
+                val appProcs = processes.filter { it.isApp }
+                (if (appProcs.isNotEmpty()) appProcs else processes).take(topCount.coerceIn(3, 20))
             }
-            .padding(horizontal = 10.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Drag handle with its own dedicated gesture detector
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        onDrag(dragAmount.x, dragAmount.y)
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(containerBg)
+                    .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onDrag(dragAmount.x, dragAmount.y)
+                        }
                     }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("⠿", color = Color(0xFFAAAAAA), fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.width(6.dp))
-
-        // Center content area depending on overlayType
-        Row(
-            modifier = Modifier.weight(1f, fill = false),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            when (overlayType) {
-                OverlayType.RESOURCE_HUD -> ResourceTicker(snapshot)
-                OverlayType.TOP_PROCESSES -> TopProcessesTicker(processes, topCount)
-                OverlayType.SINGLE_PROCESS -> SingleProcessTicker(processes, singleProcessKey)
-            }
-        }
-
-        Spacer(Modifier.width(8.dp))
-
-        // Mode switch badge button (HUD / TOP / PROC)
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0x28FFFFFF))
-                .clickable { onCycleType() }
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                when (overlayType) {
-                    OverlayType.RESOURCE_HUD -> "HUD"
-                    OverlayType.TOP_PROCESSES -> "TOP"
-                    OverlayType.SINGLE_PROCESS -> "PROC"
-                },
-                color = Color(0xFFE0E0E0),
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-
-        Spacer(Modifier.width(4.dp))
-
-        // Minimize button "–"
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .clip(CircleShape)
-                .background(Color(0x22FFFFFF))
-                .clickable { onToggleMinimize() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("–", color = Color(0xFFE0E0E0), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-        }
-
-        Spacer(Modifier.width(4.dp))
-
-        // Close button "✕"
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .clip(CircleShape)
-                .background(Color(0x22FFFFFF))
-                .clickable { onClose() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("✕", color = Color(0xFFE0E0E0), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-private fun ResourceTicker(snapshot: Snapshot?) {
-    val cpu = snapshot?.cpu
-    val mem = snapshot?.memory
-    val gpu = snapshot?.gpu
-    val net = snapshot?.network
-    val battery = snapshot?.battery
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        // CPU
-        Text("CPU ", color = Color(0xFF4FC3F7), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Text(formatPercent(cpu?.usage), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-
-        // Separator
-        Text(" • ", color = Color(0xFF555555), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-
-        // RAM
-        Text("RAM ", color = Color(0xFF81C784), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Text(mem?.let { formatBytes(it.usedBytes) } ?: "—", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-
-        // Separator
-        Text(" • ", color = Color(0xFF555555), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-
-        // GPU
-        Text("GPU ", color = Color(0xFFFF80AB), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Text(gpu?.usage?.let(::formatPercent) ?: "—", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-
-        // Separator
-        Text(" • ", color = Color(0xFF555555), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-
-        // NET
-        val netRate = (net?.rxBytesPerSec ?: 0L) + (net?.txBytesPerSec ?: 0L)
-        Text("NET ", color = Color(0xFFFFD54F), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-        Text(formatRate(netRate), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-
-        // Temp
-        battery?.tempC?.let { temp ->
-            Text(" • ", color = Color(0xFF555555), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            Text(formatTemperature(temp), color = Color(0xFFFF8A65), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
-}
-
-@Composable
-private fun TopProcessesTicker(processes: List<ProcessGroup>, count: Int) {
-    val top = processes.filter { it.isApp }.take(count.coerceIn(1, 4))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (top.isEmpty()) {
-            Text("No active app processes", color = Color(0xFFB0B0B0), fontSize = 11.sp)
-        } else {
-            top.forEachIndexed { i, group ->
-                if (i > 0) {
-                    Text(" • ", color = Color(0xFF555555), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 66.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    if (topList.isEmpty()) {
+                        Text("No processes", color = Color.White, fontSize = 11.sp)
+                    } else {
+                        topList.forEach { p ->
+                            ProcessMetricLine(
+                                name = p.label,
+                                cpu = p.cpu,
+                                gpu = p.gpu,
+                                memBytes = p.rssBytes,
+                                swapBytes = p.swapBytes,
+                                onNameClick = onCycleType,
+                            )
+                        }
+                    }
                 }
-                Text("${i + 1}. ", color = Color(0xFFAAAAAA), fontSize = 11.sp)
-                Text(group.label, color = Color(0xFF4FC3F7), fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+                Spacer(Modifier.width(6.dp))
+
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    // Minimize "-"
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x30FFFFFF))
+                            .clickable { onToggleMinimize() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("–", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Close "X"
+                    Box(
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x30FFFFFF))
+                            .clickable { onClose() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("✕", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        OverlayType.SINGLE_PROCESS -> {
+            // Single: {Name}: C:X% G:Y% Z MB [S] - X
+            val p = targetProcess
+            val name = p?.label ?: "App"
+            val cpu = p?.cpu ?: 0f
+            val gpu = p?.gpu ?: 0f
+            val memBytes = p?.rssBytes ?: 0L
+            val swapBytes = p?.swapBytes ?: 0L
+
+            Row(
+                modifier = Modifier
+                    .height(30.dp)
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(containerBg)
+                    .border(1.dp, borderColor, RoundedCornerShape(15.dp))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onDrag(dragAmount.x, dragAmount.y)
+                        }
+                    }
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ProcessMetricLine(
+                    name = name,
+                    cpu = cpu,
+                    gpu = gpu,
+                    memBytes = memBytes,
+                    swapBytes = swapBytes,
+                    onNameClick = onCycleType,
+                )
+
                 Spacer(Modifier.width(2.dp))
-                Text(formatPercentFine(group.cpu), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+
+                // "-" Minimize
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x30FFFFFF))
+                        .clickable { onToggleMinimize() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("–", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                // "X" Close
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x30FFFFFF))
+                        .clickable { onClose() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✕", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        OverlayType.RESOURCE_HUD -> {
+            // Main HUD: Sys: C:X% G:Y% Z MB [S] N:rate - X
+            val cpuUsage = snapshot?.cpu?.usage
+            val gpuUsage = snapshot?.gpu?.usage
+            val memUsed = snapshot?.memory?.usedBytes ?: 0L
+            val swapUsed = snapshot?.memory?.swapUsedBytes ?: 0L
+            val netRate = (snapshot?.network?.rxBytesPerSec ?: 0L) + (snapshot?.network?.txBytesPerSec ?: 0L)
+
+            Row(
+                modifier = Modifier
+                    .height(30.dp)
+                    .clip(RoundedCornerShape(15.dp))
+                    .background(containerBg)
+                    .border(1.dp, borderColor, RoundedCornerShape(15.dp))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            onDrag(dragAmount.x, dragAmount.y)
+                        }
+                    }
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    "Sys:",
+                    color = Color(0xFF80D8FF),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clickable { onCycleType() },
+                )
+                Text("C:${formatPercent(cpuUsage)}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text("G:${gpuUsage?.let(::formatPercent) ?: "0%"}", color = Color(0xFFFF80AB), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                Text(formatBytes(memUsed), color = Color(0xFF69F0AE), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                val swapStr = if (swapUsed > 0) "[S:${formatBytes(swapUsed)}]" else "[S]"
+                Text(swapStr, color = Color(0xFFB388FF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                Text("N:${formatRate(netRate)}", color = Color(0xFFFFD54F), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+
+                Spacer(Modifier.width(2.dp))
+
+                // "-" Minimize
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x30FFFFFF))
+                        .clickable { onToggleMinimize() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("–", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                // "X" Close
+                Box(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x30FFFFFF))
+                        .clickable { onClose() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✕", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun SingleProcessTicker(processes: List<ProcessGroup>, key: String?) {
-    val target = processes.firstOrNull { it.key == key } ?: processes.firstOrNull()
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (target == null) {
-            Text("No process selected", color = Color(0xFFB0B0B0), fontSize = 11.sp)
-        } else {
-            Text(target.label, color = Color(0xFF4FC3F7), fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(": ", color = Color(0xFFAAAAAA), fontSize = 11.sp)
-            Text("${formatPercentFine(target.cpu)} CPU", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Text(" • ", color = Color(0xFF555555), fontSize = 11.sp)
-            Text(formatBytes(target.rssBytes), color = Color(0xFF81C784), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Text(" • ", color = Color(0xFF555555), fontSize = 11.sp)
-            Text("${target.threads} th", color = Color(0xFFFFD54F), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        }
+private fun ProcessMetricLine(
+    name: String,
+    cpu: Float,
+    gpu: Float,
+    memBytes: Long,
+    swapBytes: Long,
+    onNameClick: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            "$name:",
+            color = Color(0xFF80D8FF),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .widthIn(max = 70.dp)
+                .clickable { onNameClick() },
+        )
+        Text("C:${formatPercentFine(cpu)}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text("G:${if (gpu > 0f) formatPercentFine(gpu) else "0%"}", color = Color(0xFFFF80AB), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Text(formatBytes(memBytes), color = Color(0xFF69F0AE), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        val swapStr = if (swapBytes > 0) "[S:${formatBytes(swapBytes)}]" else "[S]"
+        Text(swapStr, color = Color(0xFFB388FF), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

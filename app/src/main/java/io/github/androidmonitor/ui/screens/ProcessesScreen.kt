@@ -82,15 +82,15 @@ import io.github.androidmonitor.ui.util.formatPercentFine
 import io.github.androidmonitor.ui.util.formatPower
 import io.github.androidmonitor.ui.util.formatRate
 
-private val NameColumnWidth = 200.dp
-private val CpuColumnWidth = 76.dp
-private val MemoryColumnWidth = 104.dp
-private val SwapColumnWidth = 84.dp
-private val GpuColumnWidth = 68.dp
-private val NetColumnWidth = 88.dp
-private val PowerColumnWidth = 84.dp
-private val ThreadsColumnWidth = 64.dp
-private val PidColumnWidth = 60.dp
+private fun getNameColumnWidth(isCompact: Boolean) = if (isCompact) 150.dp else 200.dp
+private fun getCpuColumnWidth(isCompact: Boolean) = if (isCompact) 62.dp else 76.dp
+private fun getMemoryColumnWidth(isCompact: Boolean) = if (isCompact) 84.dp else 104.dp
+private fun getSwapColumnWidth(isCompact: Boolean) = if (isCompact) 68.dp else 84.dp
+private fun getGpuColumnWidth(isCompact: Boolean) = if (isCompact) 56.dp else 68.dp
+private fun getNetColumnWidth(isCompact: Boolean) = if (isCompact) 72.dp else 88.dp
+private fun getPowerColumnWidth(isCompact: Boolean) = if (isCompact) 70.dp else 84.dp
+private fun getThreadsColumnWidth(isCompact: Boolean) = if (isCompact) 50.dp else 64.dp
+private fun getPidColumnWidth(isCompact: Boolean) = if (isCompact) 50.dp else 60.dp
 
 private enum class SortBy(val label: String) {
     NAME("Name"),
@@ -164,6 +164,7 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     val totalMemory = monitor?.snapshot?.memory?.totalBytes ?: 0L
     val pinnedKeys by vm.settings.pinnedProcesses.collectAsStateWithLifecycle()
     val grouping by vm.settings.processGrouping.collectAsStateWithLifecycle()
+    val isCompact by vm.settings.compactProcesses.collectAsStateWithLifecycle()
     val horizontalScrollState = rememberScrollState()
 
     val visible = remember(state, query, sortBy, showKernel, pinnedKeys) {
@@ -194,6 +195,12 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(
+                selected = isCompact,
+                onClick = { vm.settings.setCompactProcesses(!isCompact) },
+                label = { Text("Compact", fontSize = 11.sp) },
+                modifier = Modifier.height(28.dp),
+            )
             FilterChip(
                 selected = showKernel,
                 onClick = { showKernel = !showKernel },
@@ -264,10 +271,13 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
         }
     }
 
-    HeaderRow(sortBy, { sortBy = it }, monitor, horizontalScrollState)
+    HeaderRow(sortBy, { sortBy = it }, monitor, horizontalScrollState, isCompact)
     HorizontalDivider()
 
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 72.dp),
+    ) {
         if (grouping == ProcessGrouping.MIXED) {
             items(visible, key = { it.key }) { group ->
                 ProcessRow(
@@ -275,6 +285,7 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
                     totalMemory = totalMemory,
                     apps = vm.apps,
                     horizontalScrollState = horizontalScrollState,
+                    isCompact = isCompact,
                     onClick = { selectedKey = it.key },
                     onTogglePin = {
                         vm.togglePin(group)
@@ -300,6 +311,7 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
                 totalMemory = totalMemory,
                 apps = vm.apps,
                 horizontalScrollState = horizontalScrollState,
+                isCompact = isCompact,
                 onClick = { selectedKey = it.key },
                 onTogglePin = {
                     vm.togglePin(it)
@@ -323,6 +335,7 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
                 totalMemory = totalMemory,
                 apps = vm.apps,
                 horizontalScrollState = horizontalScrollState,
+                isCompact = isCompact,
                 onClick = { selectedKey = it.key },
                 onTogglePin = {
                     vm.togglePin(it)
@@ -396,47 +409,48 @@ private fun HeaderRow(
     onSort: (SortBy) -> Unit,
     monitor: MonitorState?,
     scrollState: ScrollState,
+    isCompact: Boolean,
 ) {
     val snapshot = monitor?.snapshot
     Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp),
+        Modifier.fillMaxWidth().padding(start = if (isCompact) 8.dp else 16.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
-        HeaderCell("Name", null, sortBy == SortBy.NAME, Modifier.width(NameColumnWidth), Alignment.Start) {
+        HeaderCell("Name", null, sortBy == SortBy.NAME, Modifier.width(getNameColumnWidth(isCompact)), Alignment.Start, isCompact) {
             onSort(SortBy.NAME)
         }
         Row(Modifier.horizontalScroll(scrollState), verticalAlignment = Alignment.Bottom) {
             HeaderCell(
                 "CPU", snapshot?.cpu?.usage?.let(::formatPercent), sortBy == SortBy.CPU,
-                Modifier.width(CpuColumnWidth), Alignment.End,
+                Modifier.width(getCpuColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.CPU) }
             HeaderCell(
                 "Memory", snapshot?.memory?.usedPercent?.let(::formatPercent), sortBy == SortBy.MEMORY,
-                Modifier.width(MemoryColumnWidth), Alignment.End,
+                Modifier.width(getMemoryColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.MEMORY) }
             HeaderCell(
                 "Swap", snapshot?.memory?.swapUsedBytes?.let(::formatBytes), sortBy == SortBy.SWAP,
-                Modifier.width(SwapColumnWidth), Alignment.End,
+                Modifier.width(getSwapColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.SWAP) }
             HeaderCell(
                 "GPU", snapshot?.gpu?.usage?.let(::formatPercent), sortBy == SortBy.GPU,
-                Modifier.width(GpuColumnWidth), Alignment.End,
+                Modifier.width(getGpuColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.GPU) }
             HeaderCell(
                 "Network", snapshot?.network?.rxBytesPerSec?.let(::formatRate), sortBy == SortBy.NETWORK,
-                Modifier.width(NetColumnWidth), Alignment.End,
+                Modifier.width(getNetColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.NETWORK) }
             HeaderCell(
                 "Power (est)", snapshot?.battery?.powerW?.let(::formatPower), sortBy == SortBy.POWER,
-                Modifier.width(PowerColumnWidth), Alignment.End,
+                Modifier.width(getPowerColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.POWER) }
             HeaderCell(
                 "Threads", null, sortBy == SortBy.THREADS,
-                Modifier.width(ThreadsColumnWidth), Alignment.End,
+                Modifier.width(getThreadsColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.THREADS) }
             HeaderCell(
                 "PID", null, sortBy == SortBy.PID,
-                Modifier.width(PidColumnWidth), Alignment.End,
+                Modifier.width(getPidColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.PID) }
         }
     }
@@ -449,16 +463,26 @@ private fun HeaderCell(
     active: Boolean,
     modifier: Modifier,
     alignment: Alignment.Horizontal,
+    isCompact: Boolean = false,
     onClick: () -> Unit,
 ) {
     Column(
-        modifier.clickable(onClick = onClick).padding(top = 8.dp, bottom = 8.dp, end = 12.dp),
+        modifier.clickable(onClick = onClick).padding(
+            top = if (isCompact) 4.dp else 8.dp,
+            bottom = if (isCompact) 4.dp else 8.dp,
+            end = if (isCompact) 6.dp else 12.dp,
+        ),
         horizontalAlignment = alignment,
     ) {
-        if (total != null) Text(total, style = MaterialTheme.typography.titleMedium.tabular)
+        if (total != null) {
+            Text(
+                total,
+                style = if (isCompact) MaterialTheme.typography.labelSmall.tabular else MaterialTheme.typography.titleMedium.tabular,
+            )
+        }
         Text(
             if (active) "$label ${if (label == "Name") "↑" else "↓"}" else label,
-            style = MaterialTheme.typography.labelMedium,
+            style = if (isCompact) MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp) else MaterialTheme.typography.labelMedium,
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -470,6 +494,7 @@ private fun LazyListScope.groupSection(
     totalMemory: Long,
     apps: AppInfoCache,
     horizontalScrollState: ScrollState,
+    isCompact: Boolean,
     onClick: (ProcessGroup) -> Unit,
     onTogglePin: (ProcessGroup) -> Unit,
     onEndTask: (ProcessGroup) -> Unit,
@@ -479,9 +504,9 @@ private fun LazyListScope.groupSection(
     item(key = "section-$title") {
         Text(
             "$title (${groups.size})",
-            style = MaterialTheme.typography.titleSmall,
+            style = if (isCompact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 24.dp, top = 16.dp, bottom = 6.dp),
+            modifier = Modifier.padding(start = if (isCompact) 12.dp else 24.dp, top = if (isCompact) 8.dp else 16.dp, bottom = if (isCompact) 2.dp else 6.dp),
         )
     }
     items(groups, key = { it.key }) { group ->
@@ -490,6 +515,7 @@ private fun LazyListScope.groupSection(
             totalMemory = totalMemory,
             apps = apps,
             horizontalScrollState = horizontalScrollState,
+            isCompact = isCompact,
             onClick = onClick,
             onTogglePin = onTogglePin,
             onEndTask = onEndTask,
@@ -505,6 +531,7 @@ private fun ProcessRow(
     totalMemory: Long,
     apps: AppInfoCache,
     horizontalScrollState: ScrollState,
+    isCompact: Boolean,
     onClick: (ProcessGroup) -> Unit,
     onTogglePin: (ProcessGroup) -> Unit,
     onEndTask: (ProcessGroup) -> Unit,
@@ -528,19 +555,23 @@ private fun ProcessRow(
                 onClick = { onClick(group) },
                 onLongClick = { onTogglePin(group) },
             )
-            .padding(start = 8.dp),
+            .padding(start = if (isCompact) 4.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Name Column: Fixed on left with Close button + Icon + Pin + Title
         Row(
-            Modifier.width(NameColumnWidth).padding(vertical = 6.dp),
+            Modifier.width(getNameColumnWidth(isCompact)).padding(vertical = if (isCompact) 2.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val closeBoxSize = if (isCompact) 20.dp else 28.dp
+            val closeIconSize = if (isCompact) 11.dp else 15.dp
+            val iconSize = if (isCompact) 20.dp else 32.dp
+
             // Close button at the left side of the icon
             if (canClose) {
                 Box(
                     Modifier
-                        .size(28.dp)
+                        .size(closeBoxSize)
                         .clip(CircleShape)
                         .combinedClickable(
                             onClick = { onEndTask(group) },
@@ -552,22 +583,24 @@ private fun ProcessRow(
                         Icons.Outlined.Close,
                         contentDescription = "End task (long tap for force stop)",
                         tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(15.dp),
+                        modifier = Modifier.size(closeIconSize),
                     )
                 }
             } else {
-                Spacer(Modifier.size(28.dp))
+                Spacer(Modifier.size(closeBoxSize))
             }
 
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(if (isCompact) 2.dp else 4.dp))
 
             // Process Icon + Pin Badge
-            Box(Modifier.size(32.dp)) {
-                ProcessIcon(group, apps)
+            Box(Modifier.size(iconSize)) {
+                ProcessIcon(group, apps, size = iconSize)
                 if (group.isPinned) {
+                    val pinBadgeSize = if (isCompact) 10.dp else 14.dp
+                    val pinIconSize = if (isCompact) 7.dp else 10.dp
                     Box(
                         Modifier
-                            .size(14.dp)
+                            .size(pinBadgeSize)
                             .align(Alignment.TopEnd)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary),
@@ -577,28 +610,30 @@ private fun ProcessRow(
                             Icons.Outlined.PushPin,
                             contentDescription = "Pinned",
                             tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(10.dp),
+                            modifier = Modifier.size(pinIconSize),
                         )
                     }
                 }
             }
 
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(if (isCompact) 4.dp else 8.dp))
 
             Column(Modifier.weight(1f)) {
                 Text(
                     group.label,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = if (isCompact) MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp) else MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (!isCompact) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
 
@@ -608,29 +643,36 @@ private fun ProcessRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // CPU
-            HeatCell(formatPercentFine(group.cpu), heat.copy(alpha = heatAlpha(group.cpu / 25f)), CpuColumnWidth)
+            HeatCell(formatPercentFine(group.cpu), heat.copy(alpha = heatAlpha(group.cpu / 25f)), getCpuColumnWidth(isCompact), isCompact)
 
             // Memory (RAM + Swap under it)
             val memoryShare = if (totalMemory > 0) group.rssBytes.toFloat() / totalMemory else 0f
             Box(
                 Modifier
-                    .width(MemoryColumnWidth)
+                    .width(getMemoryColumnWidth(isCompact))
                     .fillMaxHeight()
                     .background(heat.copy(alpha = heatAlpha(memoryShare * 8f)))
-                    .padding(end = 12.dp),
+                    .padding(end = if (isCompact) 6.dp else 12.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Column(horizontalAlignment = Alignment.End) {
+                if (isCompact) {
                     Text(
                         formatBytes(group.rssBytes),
-                        style = MaterialTheme.typography.bodyMedium.tabular,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp).tabular,
                     )
-                    if (group.swapBytes > 0) {
+                } else {
+                    Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            "+${formatBytes(group.swapBytes)} swap",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            formatBytes(group.rssBytes),
+                            style = MaterialTheme.typography.bodyMedium.tabular,
                         )
+                        if (group.swapBytes > 0) {
+                            Text(
+                                "+${formatBytes(group.swapBytes)} swap",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -639,14 +681,16 @@ private fun ProcessRow(
             HeatCell(
                 text = if (group.swapBytes > 0) formatBytes(group.swapBytes) else "0 B",
                 background = Color.Transparent,
-                width = SwapColumnWidth,
+                width = getSwapColumnWidth(isCompact),
+                isCompact = isCompact,
             )
 
             // GPU (calculated from graphics thread activity and system GPU load)
             HeatCell(
                 text = if (group.gpu > 0f) formatPercentFine(group.gpu) else "0%",
                 background = heat.copy(alpha = heatAlpha(group.gpu / 25f)),
-                width = GpuColumnWidth,
+                width = getGpuColumnWidth(isCompact),
+                isCompact = isCompact,
             )
 
             // Network
@@ -654,24 +698,27 @@ private fun ProcessRow(
             HeatCell(
                 text = if (netBytes > 0) formatRate(netBytes) else "0 B/s",
                 background = Color.Transparent,
-                width = NetColumnWidth,
+                width = getNetColumnWidth(isCompact),
+                isCompact = isCompact,
             )
 
             // Power (est)
             HeatCell(
                 text = group.powerMw?.let { formatPower(it / 1000f) } ?: "—",
                 background = Color.Transparent,
-                width = PowerColumnWidth,
+                width = getPowerColumnWidth(isCompact),
+                isCompact = isCompact,
             )
 
             // Threads
-            HeatCell(text = group.threads.toString(), background = Color.Transparent, width = ThreadsColumnWidth)
+            HeatCell(text = group.threads.toString(), background = Color.Transparent, width = getThreadsColumnWidth(isCompact), isCompact = isCompact)
 
             // PID
             HeatCell(
                 text = (group.processes.firstOrNull()?.pid ?: 0).toString(),
                 background = Color.Transparent,
-                width = PidColumnWidth,
+                width = getPidColumnWidth(isCompact),
+                isCompact = isCompact,
             )
         }
     }
@@ -680,32 +727,36 @@ private fun ProcessRow(
 private fun heatAlpha(intensity: Float): Float = 0.05f + 0.40f * intensity.coerceIn(0f, 1f)
 
 @Composable
-private fun HeatCell(text: String, background: Color, width: Dp) {
+private fun HeatCell(text: String, background: Color, width: Dp, isCompact: Boolean = false) {
     Box(
         Modifier.width(width).fillMaxHeight().background(background),
         contentAlignment = Alignment.CenterEnd,
     ) {
-        Text(text, style = MaterialTheme.typography.bodyMedium.tabular, modifier = Modifier.padding(end = 12.dp))
+        Text(
+            text,
+            style = if (isCompact) MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp).tabular else MaterialTheme.typography.bodyMedium.tabular,
+            modifier = Modifier.padding(end = if (isCompact) 6.dp else 12.dp),
+        )
     }
 }
 
 @Composable
-private fun ProcessIcon(group: ProcessGroup, apps: AppInfoCache) {
+private fun ProcessIcon(group: ProcessGroup, apps: AppInfoCache, size: Dp = 32.dp) {
     val bitmap = remember(group.packageName) { group.packageName?.let(apps::icon) }
     if (bitmap != null) {
-        Image(bitmap, contentDescription = null, modifier = Modifier.size(32.dp))
+        Image(bitmap, contentDescription = null, modifier = Modifier.size(size))
     } else {
         Box(
             Modifier
-                .size(32.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .size(size)
+                .clip(RoundedCornerShape(if (size < 24.dp) 4.dp else 8.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 if (group.isKernel) Icons.Outlined.Memory else Icons.Outlined.Terminal,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(if (size < 24.dp) 12.dp else 18.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

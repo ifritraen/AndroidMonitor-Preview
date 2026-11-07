@@ -162,17 +162,27 @@ private fun MemoryDetail(state: MonitorState) {
     }
     SectionLabel("Memory composition")
     CompositionBar(memory, color)
-    val swapUsed = memory.swapTotalBytes?.let { total -> total - (memory.swapFreeBytes ?: total) }
+    val swapTotal = memory.swapTotalBytes ?: 0L
+    if (swapTotal > 0L) {
+        val swapUsed = memory.swapUsedBytes ?: 0L
+        val swapFree = memory.swapFreeBytes ?: 0L
+        SectionLabel("Swap memory (zRAM)")
+        SwapCompositionBar(swapUsed, swapFree, swapTotal, color)
+    }
     StatGrid(
         listOfNotNull(
             Stat("In use", formatBytes(memory.usedBytes), big = true),
             Stat("Available", formatBytes(memory.availableBytes), big = true),
             memory.cachedBytes?.let { Stat("Cached", formatBytes(it)) },
-            if (swapUsed != null && (memory.swapTotalBytes ?: 0) > 0) {
-                Stat("Swap (zRAM)", "${formatBytes(swapUsed)} / ${formatBytes(memory.swapTotalBytes ?: 0)}")
-            } else {
-                null
-            },
+            if (swapTotal > 0L) {
+                Stat("Swap used", formatBytes(memory.swapUsedBytes ?: 0L))
+            } else null,
+            if (swapTotal > 0L) {
+                Stat("Swap total", formatBytes(swapTotal))
+            } else null,
+            if (swapTotal > 0L && memory.swapUsedPercent != null) {
+                Stat("Swap usage", formatPercent(memory.swapUsedPercent ?: 0f))
+            } else null,
             Stat(
                 "Storage",
                 "${formatBytes(memory.storageTotalBytes - memory.storageFreeBytes)} / ${formatBytes(memory.storageTotalBytes)}",
@@ -180,6 +190,23 @@ private fun MemoryDetail(state: MonitorState) {
             Stat("Memory pressure", if (memory.lowMemory) "Low memory" else "Normal"),
         ),
     )
+}
+
+@Composable
+private fun SwapCompositionBar(usedBytes: Long, freeBytes: Long, totalBytes: Long, color: Color) {
+    val total = totalBytes.coerceAtLeast(1)
+    val used = (usedBytes.toFloat() / total).coerceIn(0f, 1f)
+    val free = (1f - used).coerceAtLeast(0f)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().height(28.dp).border(1.dp, color, RectangleShape)) {
+            if (used > 0f) Box(Modifier.weight(used).fillMaxHeight().background(color.copy(alpha = 0.55f)))
+            if (free > 0f) Box(Modifier.weight(free).fillMaxHeight())
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            LegendItem("Swap in use (${formatBytes(usedBytes)})", color.copy(alpha = 0.8f))
+            LegendItem("Swap free (${formatBytes(freeBytes)})", MaterialTheme.colorScheme.outline)
+        }
+    }
 }
 
 @Composable

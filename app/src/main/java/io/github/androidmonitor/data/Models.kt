@@ -45,6 +45,12 @@ data class MemorySnapshot(
 ) {
     val usedBytes: Long get() = (totalBytes - availableBytes).coerceAtLeast(0)
     val usedPercent: Float get() = if (totalBytes > 0) usedBytes * 100f / totalBytes else 0f
+    val swapUsedBytes: Long? get() = if (swapTotalBytes != null && swapFreeBytes != null) {
+        (swapTotalBytes - swapFreeBytes).coerceAtLeast(0)
+    } else null
+    val swapUsedPercent: Float? get() = if (swapTotalBytes != null && swapTotalBytes > 0 && swapUsedBytes != null) {
+        swapUsedBytes!! * 100f / swapTotalBytes
+    } else null
 }
 
 data class GpuSnapshot(
@@ -119,8 +125,12 @@ data class ProcessInfo(
     val user: String,
     val cpu: Float,
     val rssBytes: Long,
+    val swapBytes: Long = 0L,
     val threads: Int,
     val isKernel: Boolean,
+    val rxBytesPerSec: Long = 0L,
+    val txBytesPerSec: Long = 0L,
+    val powerMw: Float? = null,
 )
 
 /** One row in the process list: an app with all its processes, or a single native process. */
@@ -130,16 +140,37 @@ data class ProcessGroup(
     val packageName: String?,
     val processes: List<ProcessInfo>,
     val isApp: Boolean,
+    val isPinned: Boolean = false,
 ) {
     val cpu: Float = processes.sumOf { it.cpu.toDouble() }.toFloat()
     val rssBytes: Long = processes.sumOf { it.rssBytes }
+    val swapBytes: Long = processes.sumOf { it.swapBytes }
     val threads: Int = processes.sumOf { it.threads }
     val isKernel: Boolean = processes.all { it.isKernel }
+    val rxBytesPerSec: Long = processes.sumOf { it.rxBytesPerSec }
+    val txBytesPerSec: Long = processes.sumOf { it.txBytesPerSec }
+    val powerMw: Float? = processes.mapNotNull { it.powerMw }.takeIf { it.isNotEmpty() }?.sum()
 
     fun matches(query: String): Boolean =
         label.contains(query, ignoreCase = true) ||
             packageName?.contains(query, ignoreCase = true) == true ||
             processes.any { it.name.contains(query, ignoreCase = true) || it.pid.toString() == query }
+}
+
+enum class DefaultTab(val label: String) {
+    PERFORMANCE("Performance"),
+    PROCESSES("Processes"),
+}
+
+enum class ProcessGrouping(val label: String) {
+    SEPARATE("Categorized"),
+    MIXED("Unified"),
+}
+
+enum class OverlayType(val label: String) {
+    RESOURCE_HUD("Resource HUD"),
+    TOP_PROCESSES("Top processes"),
+    SINGLE_PROCESS("Single process"),
 }
 
 sealed interface ProcessListState {

@@ -27,8 +27,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val access: AccessManager = app.access
     val settings: SettingsStore = app.settings
 
-    private val systemSampler = SystemSampler(application, access)
-    private val processSampler = ProcessSampler(application, access)
+    private val systemSampler = app.systemSampler
+    private val processSampler = app.processSampler
     val apps: AppInfoCache get() = processSampler.apps
 
     /** Live readings. Polling pauses while the app is in the background. */
@@ -41,6 +41,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
 
     fun endTask(group: ProcessGroup, onResult: (Boolean) -> Unit) {
         viewModelScope.launch { onResult(processSampler.endTask(group)) }
+    }
+
+    fun forceStop(group: ProcessGroup, onResult: (Boolean) -> Unit) {
+        viewModelScope.launch { onResult(processSampler.forceStop(group)) }
+    }
+
+    fun togglePin(group: ProcessGroup) {
+        settings.togglePinProcess(group.key)
     }
 
     private fun <T> poll(minIntervalMs: Long = 0, sample: suspend () -> T): Flow<T> = flow {

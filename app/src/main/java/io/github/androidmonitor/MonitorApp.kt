@@ -9,10 +9,16 @@ class MonitorApp : Application() {
         private set
     lateinit var access: AccessManager
         private set
+    lateinit var systemSampler: io.github.androidmonitor.data.SystemSampler
+        private set
+    lateinit var processSampler: io.github.androidmonitor.data.ProcessSampler
+        private set
 
     override fun onCreate() {
         super.onCreate()
         settings = SettingsStore(this)
         access = AccessManager(this, settings)
+        systemSampler = io.github.androidmonitor.data.SystemSampler(this, access)
+        processSampler = io.github.androidmonitor.data.ProcessSampler(this, access, settings)
     }
 }

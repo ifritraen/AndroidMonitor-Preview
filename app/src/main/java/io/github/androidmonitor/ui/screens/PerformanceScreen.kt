@@ -148,8 +148,14 @@ private fun tileSummary(metric: Metric, s: Snapshot): List<String> = when (metri
         "${formatPercent(s.cpu.usage)}  ${formatFrequency(s.cpu.peakFreqMhz)}",
         if (s.cpu.source == CpuUsageSource.ESTIMATED) "Estimated" else null,
     )
-    Metric.MEMORY -> listOf(
+    Metric.MEMORY -> listOfNotNull(
         "${formatBytes(s.memory.usedBytes)} / ${formatBytes(s.memory.totalBytes)} (${formatPercent(s.memory.usedPercent)})",
+        if ((s.memory.swapTotalBytes ?: 0L) > 0L) {
+            val swapUsed = s.memory.swapUsedBytes ?: 0L
+            val swapTotal = s.memory.swapTotalBytes ?: 0L
+            val swapPct = s.memory.swapUsedPercent ?: 0f
+            "Swap: ${formatBytes(swapUsed)} / ${formatBytes(swapTotal)} (${formatPercent(swapPct)})"
+        } else null,
     )
     Metric.GPU -> listOf(
         when {

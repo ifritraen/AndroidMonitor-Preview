@@ -55,6 +55,7 @@ class AccessManager(private val context: Context, private val settings: Settings
     var shell: PrivilegedShell? = null
         private set
 
+    private var rootShell: RootShell? = null
     private var shellService: IShellService? = null
     private var binding = false
 
@@ -104,13 +105,32 @@ class AccessManager(private val context: Context, private val settings: Settings
         Shizuku.addBinderDeadListener(onBinderDead)
         Shizuku.addRequestPermissionResultListener(onPermissionResult)
         refreshShizukuStatus()
-        if (settings.preferredAccess == AccessMode.ROOT) useRoot()
+        when (settings.preferredAccess) {
+            AccessMode.ROOT -> useRoot()
+            AccessMode.SHIZUKU -> {
+                if (hasShizukuPermission()) bindShizuku()
+            }
+            AccessMode.STANDARD -> {
+                if (RootShell.isSuBinaryPresent()) {
+                    _state.update { it.copy(root = RootStatus.AVAILABLE) }
+                }
+            }
+        }
     }
 
-    /** Re-checks Shizuku, e.g. when the user comes back from starting it. */
-    fun refresh() = refreshShizukuStatus()
+    /** Re-checks Shizuku and Root, e.g. when the user comes back to the app. */
+    fun refresh() {
+        refreshShizukuStatus()
+        if (settings.preferredAccess == AccessMode.ROOT && shell == null && _state.value.root != RootStatus.CHECKING) {
+            useRoot()
+        } else if (_state.value.root == RootStatus.UNKNOWN && RootShell.isSuBinaryPresent()) {
+            _state.update { it.copy(root = RootStatus.AVAILABLE) }
+        }
+    }
 
     fun useShizuku() {
+        rootShell?.close()
+        rootShell = null
         when {
             !Shizuku.pingBinder() || Shizuku.isPreV11() -> Unit
             hasShizukuPermission() -> {
@@ -125,14 +145,19 @@ class AccessManager(private val context: Context, private val settings: Settings
     fun useRoot() {
         _state.update { it.copy(root = RootStatus.CHECKING) }
         scope.launch {
-            val available = withContext(Dispatchers.IO) { RootShell.isAvailable() }
-            _state.update { it.copy(root = if (available) RootStatus.AVAILABLE else RootStatus.UNAVAILABLE) }
-            if (available) {
+            val opened = RootShell.open()
+            if (opened != null) {
+                rootShell?.close()
+                rootShell = opened
+                _state.update { it.copy(root = RootStatus.AVAILABLE) }
                 settings.preferredAccess = AccessMode.ROOT
                 unbindShizuku()
-                activate(AccessMode.ROOT, RootShell())
-            } else if (_state.value.mode == AccessMode.ROOT) {
-                deactivate()
+                activate(AccessMode.ROOT, opened)
+            } else {
+                _state.update { it.copy(root = RootStatus.UNAVAILABLE) }
+                if (_state.value.mode == AccessMode.ROOT) {
+                    deactivate()
+                }
             }
         }
     }
@@ -140,6 +165,8 @@ class AccessManager(private val context: Context, private val settings: Settings
     fun useStandard() {
         settings.preferredAccess = AccessMode.STANDARD
         unbindShizuku()
+        rootShell?.close()
+        rootShell = null
         deactivate()
     }
 

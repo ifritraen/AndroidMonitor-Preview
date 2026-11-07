@@ -40,6 +40,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import io.github.androidmonitor.data.DefaultTab
 import io.github.androidmonitor.ui.screens.AccessScreen
 import io.github.androidmonitor.ui.screens.PerformanceScreen
 import io.github.androidmonitor.ui.screens.ProcessesScreen
@@ -50,9 +51,14 @@ enum class Destination(val label: String, val icon: ImageVector) {
     ACCESS("Access", Icons.Outlined.AdminPanelSettings),
 }
 
+fun DefaultTab.toDestination(): Destination = when (this) {
+    DefaultTab.PERFORMANCE -> Destination.PERFORMANCE
+    DefaultTab.PROCESSES -> Destination.PROCESSES
+}
+
 @Composable
 fun AppRoot(vm: MonitorViewModel = viewModel()) {
-    var destination by rememberSaveable { mutableStateOf(Destination.PERFORMANCE) }
+    var destination by rememberSaveable { mutableStateOf(vm.settings.defaultTab.value.toDestination()) }
     // Collected here so graphs keep their history while other tabs are open.
     val monitor by vm.monitor.collectAsStateWithLifecycle()
 

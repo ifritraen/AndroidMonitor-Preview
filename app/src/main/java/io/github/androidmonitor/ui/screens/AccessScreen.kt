@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,18 +45,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.androidmonitor.BuildConfig
+import io.github.androidmonitor.data.DefaultTab
+import io.github.androidmonitor.data.OverlayType
+import io.github.androidmonitor.data.ProcessGrouping
 import io.github.androidmonitor.data.SettingsStore
 import io.github.androidmonitor.privileged.AccessManager
 import io.github.androidmonitor.privileged.AccessMode
 import io.github.androidmonitor.privileged.AccessState
 import io.github.androidmonitor.privileged.RootStatus
 import io.github.androidmonitor.privileged.ShizukuStatus
+import io.github.androidmonitor.service.MonitorOverlayService
 import io.github.androidmonitor.ui.MonitorViewModel
 import io.github.androidmonitor.ui.components.ScreenTitle
 import io.github.androidmonitor.ui.components.SectionLabel
+import androidx.compose.ui.unit.dp
 
 private const val SHIZUKU_DOWNLOAD_URL = "https://shizuku.rikka.app/download/"
 private const val SHIZUKU_GUIDE_URL = "https://shizuku.rikka.app/guide/setup/"
@@ -63,6 +69,13 @@ private const val SHIZUKU_GUIDE_URL = "https://shizuku.rikka.app/guide/setup/"
 fun AccessScreen(vm: MonitorViewModel) {
     val access by vm.access.state.collectAsStateWithLifecycle()
     val refreshMs by vm.settings.refreshMs.collectAsStateWithLifecycle()
+    val defaultTab by vm.settings.defaultTab.collectAsStateWithLifecycle()
+    val processGrouping by vm.settings.processGrouping.collectAsStateWithLifecycle()
+    val overlayEnabled by vm.settings.overlayEnabled.collectAsStateWithLifecycle()
+    val overlayType by vm.settings.overlayType.collectAsStateWithLifecycle()
+    val overlayTopCount by vm.settings.overlayTopCount.collectAsStateWithLifecycle()
+    val notificationEnabled by vm.settings.notificationEnabled.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Column(
@@ -108,8 +121,102 @@ fun AccessScreen(vm: MonitorViewModel) {
                 RootActions(access, vm.access)
             }
 
+            SectionLabel("Default screen on launch", Modifier.padding(top = 8.dp))
+            DefaultTabPicker(defaultTab, vm.settings::setDefaultTab)
+
+            SectionLabel("Process list grouping", Modifier.padding(top = 8.dp))
+            ProcessGroupingPicker(processGrouping, vm.settings::setProcessGrouping)
+
             SectionLabel("Refresh rate", Modifier.padding(top = 8.dp))
             RefreshRatePicker(refreshMs, vm.settings::setRefreshMs)
+
+            SectionLabel("Floating overlay HUD", Modifier.padding(top = 8.dp))
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Enable overlay", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Floating HUD over other apps. Move, resize, or minimize anytime.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = overlayEnabled,
+                            onCheckedChange = { enable ->
+                                if (enable && !Settings.canDrawOverlays(context)) {
+                                    val intent = Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}"),
+                                    )
+                                    context.startActivity(intent)
+                                } else {
+                                    vm.settings.setOverlayEnabled(enable)
+                                    if (enable) MonitorOverlayService.start(context)
+                                    else MonitorOverlayService.update(context)
+                                }
+                            },
+                        )
+                    }
+
+                    if (overlayEnabled) {
+                        Text("Overlay variation", style = MaterialTheme.typography.labelMedium)
+                        OverlayTypePicker(overlayType) { type ->
+                            vm.settings.setOverlayType(type)
+                            MonitorOverlayService.update(context)
+                        }
+
+                        if (overlayType == OverlayType.TOP_PROCESSES) {
+                            Text("Top processes count", style = MaterialTheme.typography.labelMedium)
+                            TopCountPicker(overlayTopCount) { count ->
+                                vm.settings.setOverlayTopCount(count)
+                                MonitorOverlayService.update(context)
+                            }
+                        }
+                    }
+                }
+            }
+
+            SectionLabel("Live status notification", Modifier.padding(top = 8.dp))
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Ongoing monitor notification", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Shows live CPU, RAM, GPU, network and temp in the notification shade.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = notificationEnabled,
+                        onCheckedChange = { enable ->
+                            vm.settings.setNotificationEnabled(enable)
+                            if (enable) MonitorOverlayService.start(context)
+                            else MonitorOverlayService.update(context)
+                        },
+                    )
+                }
+            }
 
             SectionLabel("About", Modifier.padding(top = 8.dp))
             Text(
@@ -246,6 +353,74 @@ private fun RefreshRatePicker(selected: Long, onSelect: (Long) -> Unit) {
                 shape = SegmentedButtonDefaults.itemShape(index, options.size),
             ) {
                 Text(if (ms % 1000 == 0L) "${ms / 1000} s" else "${ms / 1000.0} s")
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DefaultTabPicker(selected: DefaultTab, onSelect: (DefaultTab) -> Unit) {
+    val options = DefaultTab.entries
+    SingleChoiceSegmentedButtonRow {
+        options.forEachIndexed { index, tab ->
+            SegmentedButton(
+                selected = tab == selected,
+                onClick = { onSelect(tab) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+            ) {
+                Text(tab.label)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProcessGroupingPicker(selected: ProcessGrouping, onSelect: (ProcessGrouping) -> Unit) {
+    val options = ProcessGrouping.entries
+    SingleChoiceSegmentedButtonRow {
+        options.forEachIndexed { index, grouping ->
+            SegmentedButton(
+                selected = grouping == selected,
+                onClick = { onSelect(grouping) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+            ) {
+                Text(grouping.label)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OverlayTypePicker(selected: OverlayType, onSelect: (OverlayType) -> Unit) {
+    val options = OverlayType.entries
+    SingleChoiceSegmentedButtonRow {
+        options.forEachIndexed { index, type ->
+            SegmentedButton(
+                selected = type == selected,
+                onClick = { onSelect(type) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+            ) {
+                Text(type.label)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TopCountPicker(selected: Int, onSelect: (Int) -> Unit) {
+    val options = SettingsStore.TOP_PROCESS_OPTIONS
+    SingleChoiceSegmentedButtonRow {
+        options.forEachIndexed { index, count ->
+            SegmentedButton(
+                selected = count == selected,
+                onClick = { onSelect(count) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+            ) {
+                Text("$count")
             }
         }
     }

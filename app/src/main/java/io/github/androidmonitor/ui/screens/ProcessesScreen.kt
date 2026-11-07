@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -120,23 +123,31 @@ private enum class SortBy(val label: String) {
 fun ProcessesScreen(vm: MonitorViewModel, monitor: MonitorState?, onOpenAccess: () -> Unit) {
     val state by vm.processes.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
-        ScreenTitle("Processes", Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp))
         when (val s = state) {
-            ProcessListState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+            ProcessListState.Loading -> {
+                ScreenTitle("Processes", Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp))
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
             }
-            ProcessListState.NeedsAccess -> Box(Modifier.padding(horizontal = 24.dp)) {
-                NoticeCard(
-                    icon = Icons.Outlined.Lock,
-                    title = "The process list needs Shizuku or root",
-                    body = "Android hides other apps' processes from regular apps. Connect Shizuku " +
-                        "(no root needed) or root to see what's using your CPU and memory, and to end tasks.",
-                    actionLabel = "Set up access",
-                    onAction = onOpenAccess,
-                )
+            ProcessListState.NeedsAccess -> {
+                ScreenTitle("Processes", Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp))
+                Box(Modifier.padding(horizontal = 20.dp)) {
+                    NoticeCard(
+                        icon = Icons.Outlined.Lock,
+                        title = "The process list needs Shizuku or root",
+                        body = "Android hides other apps' processes from regular apps. Connect Shizuku " +
+                            "(no root needed) or root to see what's using your CPU and memory, and to end tasks.",
+                        actionLabel = "Set up access",
+                        onAction = onOpenAccess,
+                    )
+                }
             }
-            is ProcessListState.Error -> Box(Modifier.padding(horizontal = 24.dp)) {
-                NoticeCard(icon = Icons.Outlined.ErrorOutline, title = "Something went wrong", body = s.message)
+            is ProcessListState.Error -> {
+                ScreenTitle("Processes", Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 8.dp))
+                Box(Modifier.padding(horizontal = 20.dp)) {
+                    NoticeCard(icon = Icons.Outlined.ErrorOutline, title = "Something went wrong", body = s.message)
+                }
             }
             is ProcessListState.Ready -> ProcessTable(s, vm, monitor)
         }
@@ -162,60 +173,95 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
             .filter { (showKernel || !it.isKernel) && (trimmed.isEmpty() || it.matches(trimmed)) }
             .sortedWith(sortBy.comparator(pinnedKeys))
     }
-    val apps = visible.filter { it.isApp }
-    val system = visible.filterNot { it.isApp }
+    val (apps, system) = remember(visible) { visible.partition { it.isApp } }
 
+    // Top Compact Bar: Title, Counts and Filter Chips
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Search processes") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { query = "" }) { Icon(Icons.Outlined.Close, contentDescription = "Clear") }
-                }
-            },
-            singleLine = true,
-            shape = RoundedCornerShape(28.dp),
-        )
-        FilterChip(
-            selected = showKernel,
-            onClick = { showKernel = !showKernel },
-            label = { Text("Kernel") },
-        )
-        FilterChip(
-            selected = grouping == ProcessGrouping.MIXED,
-            onClick = {
-                vm.settings.setProcessGrouping(
-                    if (grouping == ProcessGrouping.MIXED) ProcessGrouping.SEPARATE else ProcessGrouping.MIXED,
-                )
-            },
-            label = { Text(if (grouping == ProcessGrouping.MIXED) "Mixed" else "Separated") },
-        )
-    }
-
-    Row(
-        Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 4.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            "${state.processCount} processes · ${state.threadCount} threads" +
-                if (pinnedKeys.isNotEmpty()) " · ${pinnedKeys.size} pinned" else "",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            "Slide → for more metrics",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Processes", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "${state.processCount} procs · ${state.threadCount} thr" +
+                    if (pinnedKeys.isNotEmpty()) " · ${pinnedKeys.size} pinned" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(
+                selected = showKernel,
+                onClick = { showKernel = !showKernel },
+                label = { Text("Kernel", fontSize = 11.sp) },
+                modifier = Modifier.height(28.dp),
+            )
+            FilterChip(
+                selected = grouping == ProcessGrouping.MIXED,
+                onClick = {
+                    vm.settings.setProcessGrouping(
+                        if (grouping == ProcessGrouping.MIXED) ProcessGrouping.SEPARATE else ProcessGrouping.MIXED,
+                    )
+                },
+                label = { Text(if (grouping == ProcessGrouping.MIXED) "Mixed" else "Separated", fontSize = 11.sp) },
+                modifier = Modifier.height(28.dp),
+            )
+        }
+    }
+
+    // Compact Search Bar (34dp height)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 4.dp)
+            .height(34.dp)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(17.dp))
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                Icons.Outlined.Search,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Search processes…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (query.isNotEmpty()) {
+                Icon(
+                    Icons.Outlined.Close,
+                    contentDescription = "Clear",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .clickable { query = "" },
+                )
+            }
+        }
     }
 
     HeaderRow(sortBy, { sortBy = it }, monitor, horizontalScrollState)
@@ -596,13 +642,17 @@ private fun ProcessRow(
                 width = SwapColumnWidth,
             )
 
-            // GPU (Android drivers do not expose per-process GPU to userspace)
-            HeatCell(text = "—", background = Color.Transparent, width = GpuColumnWidth)
+            // GPU (calculated from graphics thread activity and system GPU load)
+            HeatCell(
+                text = if (group.gpu > 0f) formatPercentFine(group.gpu) else "0%",
+                background = heat.copy(alpha = heatAlpha(group.gpu / 25f)),
+                width = GpuColumnWidth,
+            )
 
             // Network
             val netBytes = group.rxBytesPerSec + group.txBytesPerSec
             HeatCell(
-                text = if (netBytes > 0) formatRate(netBytes) else "—",
+                text = if (netBytes > 0) formatRate(netBytes) else "0 B/s",
                 background = Color.Transparent,
                 width = NetColumnWidth,
             )
@@ -684,7 +734,9 @@ private fun ProcessDialog(
                 if (group.swapBytes > 0) {
                     KeyValue("Swap (zRAM)", formatBytes(group.swapBytes))
                 }
-                KeyValue("GPU", "N/A (Driver limitation)")
+                KeyValue("GPU (est)", if (group.gpu > 0f) formatPercentFine(group.gpu) else "0%")
+                KeyValue("Network", "↓ ${formatRate(group.rxBytesPerSec)}  ↑ ${formatRate(group.txBytesPerSec)}")
+                KeyValue("Power (est)", group.powerMw?.let { formatPower(it / 1000f) } ?: "—")
                 KeyValue("Threads", group.threads.toString())
                 KeyValue("User", group.processes.first().user)
                 KeyValue("Pinned", if (isPinned) "Yes" else "No")
@@ -703,7 +755,7 @@ private fun ProcessDialog(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Note: Android kernel & proprietary GPU drivers (Adreno, Mali) do not expose per-process GPU usage to userspace.",
+                    "Note: GPU and Power are estimated based on graphics thread activity, system GPU load, and CPU proportion.",
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

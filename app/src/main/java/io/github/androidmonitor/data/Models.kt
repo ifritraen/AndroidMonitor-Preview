@@ -126,6 +126,7 @@ data class ProcessInfo(
     val cpu: Float,
     val rssBytes: Long,
     val swapBytes: Long = 0L,
+    val gpu: Float = 0f,
     val threads: Int,
     val isKernel: Boolean,
     val rxBytesPerSec: Long = 0L,
@@ -145,6 +146,7 @@ data class ProcessGroup(
     val cpu: Float = processes.sumOf { it.cpu.toDouble() }.toFloat()
     val rssBytes: Long = processes.sumOf { it.rssBytes }
     val swapBytes: Long = processes.sumOf { it.swapBytes }
+    val gpu: Float = processes.sumOf { it.gpu.toDouble() }.toFloat()
     val threads: Int = processes.sumOf { it.threads }
     val isKernel: Boolean = processes.all { it.isKernel }
     val rxBytesPerSec: Long = processes.sumOf { it.rxBytesPerSec }

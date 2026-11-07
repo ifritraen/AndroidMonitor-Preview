@@ -1,10 +1,17 @@
 package io.github.androidmonitor.ui.screens
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -76,6 +83,30 @@ fun AccessScreen(vm: MonitorViewModel) {
     val overlayTopCount by vm.settings.overlayTopCount.collectAsStateWithLifecycle()
     val notificationEnabled by vm.settings.notificationEnabled.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    val notificationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            vm.settings.setNotificationEnabled(true)
+            MonitorOverlayService.start(context)
+        } else {
+            Toast.makeText(context, "Notification permission is required to post monitor status", Toast.LENGTH_SHORT).show()
+            vm.settings.setNotificationEnabled(false)
+        }
+    }
+
+    val overlayLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult(),
+    ) {
+        if (Settings.canDrawOverlays(context)) {
+            vm.settings.setOverlayEnabled(true)
+            MonitorOverlayService.start(context)
+        } else {
+            Toast.makeText(context, "'Display over other apps' permission is required for overlay", Toast.LENGTH_SHORT).show()
+            vm.settings.setOverlayEnabled(false)
+        }
+    }
 
     Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Column(
@@ -154,16 +185,21 @@ fun AccessScreen(vm: MonitorViewModel) {
                         Switch(
                             checked = overlayEnabled,
                             onCheckedChange = { enable ->
-                                if (enable && !Settings.canDrawOverlays(context)) {
-                                    val intent = Intent(
-                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                        Uri.parse("package:${context.packageName}"),
-                                    )
-                                    context.startActivity(intent)
+                                if (enable) {
+                                    if (!Settings.canDrawOverlays(context)) {
+                                        Toast.makeText(context, "Please allow 'Display over other apps' to enable the floating overlay", Toast.LENGTH_LONG).show()
+                                        val intent = Intent(
+                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                            Uri.parse("package:${context.packageName}"),
+                                        )
+                                        overlayLauncher.launch(intent)
+                                    } else {
+                                        vm.settings.setOverlayEnabled(true)
+                                        MonitorOverlayService.start(context)
+                                    }
                                 } else {
-                                    vm.settings.setOverlayEnabled(enable)
-                                    if (enable) MonitorOverlayService.start(context)
-                                    else MonitorOverlayService.update(context)
+                                    vm.settings.setOverlayEnabled(false)
+                                    MonitorOverlayService.update(context)
                                 }
                             },
                         )
@@ -210,9 +246,19 @@ fun AccessScreen(vm: MonitorViewModel) {
                     Switch(
                         checked = notificationEnabled,
                         onCheckedChange = { enable ->
-                            vm.settings.setNotificationEnabled(enable)
-                            if (enable) MonitorOverlayService.start(context)
-                            else MonitorOverlayService.update(context)
+                            if (enable) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    vm.settings.setNotificationEnabled(true)
+                                    MonitorOverlayService.start(context)
+                                }
+                            } else {
+                                vm.settings.setNotificationEnabled(false)
+                                MonitorOverlayService.update(context)
+                            }
                         },
                     )
                 }

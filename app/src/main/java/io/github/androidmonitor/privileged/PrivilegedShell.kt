@@ -24,9 +24,12 @@ suspend fun PrivilegedShell.readFiles(paths: Collection<String>): Map<String, St
 
 /** Runs a process and returns its stdout, or null if it couldn't be started. */
 internal fun runProcess(vararg argv: String): String? = try {
-    val process = ProcessBuilder(*argv)
-        .redirectError(File("/dev/null"))
-        .start()
+    val pb = ProcessBuilder(*argv)
+        .redirectErrorStream(true)
+    val env = pb.environment()
+    val curPath = env["PATH"] ?: System.getenv("PATH") ?: ""
+    env["PATH"] = "$curPath:/system/bin:/system/xbin:/sbin:/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin"
+    val process = pb.start()
     val output = process.inputStream.bufferedReader().use { it.readText() }
     process.waitFor()
     output

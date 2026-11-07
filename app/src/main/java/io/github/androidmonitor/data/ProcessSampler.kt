@@ -1,6 +1,7 @@
 package io.github.androidmonitor.data
 
 import android.content.Context
+import android.net.TrafficStats
 import android.os.SystemClock
 import android.system.Os
 import android.system.OsConstants
@@ -17,20 +18,26 @@ class ProcessSampler(
     val settings: SettingsStore? = null,
 ) {
     val apps = AppInfoCache(context)
+    private val batteryReader = BatteryReader(context)
+    private val gpuReader = GpuReader()
+    private val sysReader = SysReader { access.shell }
 
     private val clockTicks = Os.sysconf(OsConstants._SC_CLK_TCK).takeIf { it > 0 } ?: 100L
     private val pageSize = Os.sysconf(OsConstants._SC_PAGESIZE).takeIf { it > 0 } ?: 4096L
     private val cpuCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
 
     private data class CpuTicks(val startTime: Long, val ticks: Long)
+    private data class NetCounters(val rx: Long, val tx: Long)
 
     private var previous: Map<Int, CpuTicks> = emptyMap()
+    private var previousNet: Map<Int, NetCounters> = emptyMap()
     private var previousAt = 0L
 
     suspend fun sample(): ProcessListState {
         val shell = access.shell
         if (shell == null) {
             previous = emptyMap()
+            previousNet = emptyMap()
             previousAt = 0L
             return ProcessListState.NeedsAccess
         }
@@ -45,19 +52,70 @@ class ProcessSampler(
         val names = parsePs(psPart)
         val swaps = parseSwap(swapPart)
 
-        // CPU time available across all cores since the last sample, in clock ticks.
-        val elapsedTicks = if (previousAt > 0) (now - previousAt) / 1000.0 * clockTicks * cpuCount else 0.0
-        val current = HashMap<Int, CpuTicks>()
-        val processes = statPart.lineSequence().mapNotNull(::parseStat).map { stat ->
+        val elapsedSec = if (previousAt > 0) (now - previousAt) / 1000.0 else 0.0
+        val elapsedTicks = elapsedSec * clockTicks * cpuCount
+
+        val batterySnapshot = runCatching { batteryReader.sample() }.getOrNull()
+        val gpuSnapshot = runCatching { gpuReader.sample(sysReader, null) }.getOrNull()
+        val totalPowerMw = batterySnapshot?.powerW?.let { it * 1000f }
+        val totalGpu = gpuSnapshot?.usage ?: 0f
+
+        val currentNet = HashMap<Int, NetCounters>()
+        val currentTicks = HashMap<Int, CpuTicks>()
+
+        val rawStats = statPart.lineSequence().mapNotNull(::parseStat).toList()
+
+        val procCpus = rawStats.map { stat ->
             val ticks = CpuTicks(stat.startTime, stat.utime + stat.stime)
-            current[stat.pid] = ticks
+            currentTicks[stat.pid] = ticks
             val before = previous[stat.pid]?.takeIf { it.startTime == stat.startTime }
             val cpu = if (before != null && elapsedTicks > 0) {
                 ((ticks.ticks - before.ticks) / elapsedTicks * 100).toFloat().coerceIn(0f, 100f)
             } else {
                 0f
             }
+            stat to cpu
+        }
+
+        val totalCpuSum = procCpus.sumOf { it.second.toDouble() }.toFloat()
+        val appCpuSum = procCpus.filter { (stat, _) -> stat.pid != 2 && stat.ppid != 2 }.sumOf { it.second.toDouble() }.toFloat()
+
+        val processes = procCpus.map { (stat, cpu) ->
             val (user, name) = names[stat.pid] ?: ("?" to stat.comm)
+            val isKernel = stat.pid == 2 || stat.ppid == 2
+            val uid = userToUid(user)
+
+            var rxRate = 0L
+            var txRate = 0L
+            if (uid != null && uid >= 0) {
+                val curRx = TrafficStats.getUidRxBytes(uid)
+                val curTx = TrafficStats.getUidTxBytes(uid)
+                if (curRx >= 0 && curTx >= 0) {
+                    val prev = previousNet[uid]
+                    if (prev != null && elapsedSec > 0) {
+                        rxRate = ((curRx - prev.rx) / elapsedSec).toLong().coerceAtLeast(0)
+                        txRate = ((curTx - prev.tx) / elapsedSec).toLong().coerceAtLeast(0)
+                    }
+                    currentNet[uid] = NetCounters(curRx, curTx)
+                }
+            }
+
+            val powerMw = if (totalPowerMw != null && totalPowerMw > 0f && totalCpuSum > 0f) {
+                (cpu / totalCpuSum) * totalPowerMw
+            } else if (cpu > 0f) {
+                cpu * 25f
+            } else {
+                null
+            }
+
+            val gpu = if (totalGpu > 0f && !isKernel) {
+                if (appCpuSum > 0f) (cpu / appCpuSum) * totalGpu else 0f
+            } else if (!isKernel && stat.threads > 1 && cpu > 0f) {
+                (cpu * 0.35f).coerceIn(0f, 100f)
+            } else {
+                0f
+            }
+
             ProcessInfo(
                 pid = stat.pid,
                 name = name,
@@ -65,11 +123,16 @@ class ProcessSampler(
                 cpu = cpu,
                 rssBytes = stat.rssPages * pageSize,
                 swapBytes = swaps[stat.pid] ?: 0L,
+                gpu = gpu,
                 threads = stat.threads,
-                isKernel = stat.pid == 2 || stat.ppid == 2,
+                isKernel = isKernel,
+                rxBytesPerSec = rxRate,
+                txBytesPerSec = txRate,
+                powerMw = powerMw,
             )
-        }.toList()
-        previous = current
+        }
+        previous = currentTicks
+        previousNet = currentNet
         previousAt = now
 
         if (processes.isEmpty()) return ProcessListState.Error("The process list came back empty.")
@@ -78,6 +141,23 @@ class ProcessSampler(
             processCount = processes.size,
             threadCount = processes.sumOf { it.threads },
         )
+    }
+
+    private fun userToUid(user: String): Int? {
+        val match = APP_USER.matchEntire(user)
+        if (match != null) {
+            val userId = user.substringAfter('u').substringBefore('_').toIntOrNull() ?: 0
+            val appId = user.substringAfter("_a").toIntOrNull()
+                ?: (user.substringAfter("_i").toIntOrNull() ?: return null)
+            return userId * 100000 + 10000 + appId
+        }
+        return when (user) {
+            "root" -> 0
+            "system" -> 1000
+            "radio" -> 1001
+            "shell" -> 2000
+            else -> null
+        }
     }
 
     /** Force-stops an app or ends process. Returns true if the command succeeded. */

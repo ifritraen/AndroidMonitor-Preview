@@ -11,7 +11,6 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 class ShizukuShell(private val service: IShellService) : PrivilegedShell {
     override suspend fun exec(command: String): String? = withContext(Dispatchers.IO) {
@@ -25,7 +24,7 @@ class ShizukuShell(private val service: IShellService) : PrivilegedShell {
 
 class RootShell private constructor(
     private var process: Process,
-    private val suPath: String,
+    private val suBinary: String,
 ) : PrivilegedShell, Closeable {
 
     private var writer = BufferedWriter(OutputStreamWriter(process.outputStream, Charsets.UTF_8))
@@ -33,43 +32,31 @@ class RootShell private constructor(
     private val isClosed = AtomicBoolean(false)
     private val lock = Any()
 
-    init {
-        startStderrDrainer(process)
-    }
-
-    private fun startStderrDrainer(proc: Process) {
-        thread(isDaemon = true, name = "RootShell-StderrDrainer") {
-            try {
-                proc.errorStream.bufferedReader().forEachLine { /* drain to prevent pipe blocking */ }
-            } catch (_: Exception) {}
-        }
-    }
-
     private fun ensureAlive(): Boolean {
         if (isClosed.get()) return false
         if (process.isAlive) return true
         return try {
-            val newProc = startProcess(suPath) ?: return false
+            val newProc = startProcess(suBinary) ?: return false
             process = newProc
             writer = BufferedWriter(OutputStreamWriter(process.outputStream, Charsets.UTF_8))
             reader = BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8))
-            startStderrDrainer(process)
             true
         } catch (_: Exception) {
             false
         }
     }
 
-    override suspend fun exec(command: String): String? = withContext(Dispatchers.IO) {
-        withTimeoutOrNull(EXEC_TIMEOUT_MS) {
+    override suspend fun exec(command: String): String? = exec(command, EXEC_TIMEOUT_MS)
+
+    suspend fun exec(command: String, timeoutMs: Long): String? = withContext(Dispatchers.IO) {
+        val result = withTimeoutOrNull(timeoutMs) {
             synchronized(lock) {
                 if (!ensureAlive()) return@withTimeoutOrNull null
-                val marker = "__CMD_DONE_${UUID.randomUUID()}__"
+                val marker = "__AM_DONE_${UUID.randomUUID()}__"
                 try {
                     writer.write(command)
-                    writer.newLine()
-                    writer.write("printf '\\n%s %s\\n' '$marker' \"$?\"")
-                    writer.newLine()
+                    writer.write("\n")
+                    writer.write("echo \"$marker \$?\"\n")
                     writer.flush()
 
                     val output = StringBuilder()
@@ -87,6 +74,8 @@ class RootShell private constructor(
                 }
             }
         }
+        // Fallback to single-shot su -c if the interactive shell failed or timed out
+        result ?: runProcess("su", "-c", command)
     }
 
     override fun close() {
@@ -105,80 +94,70 @@ class RootShell private constructor(
 
     companion object {
         private const val EXEC_TIMEOUT_MS = 10_000L
-        private const val GRANT_TIMEOUT_MS = 20_000L
+        private const val GRANT_TIMEOUT_MS = 30_000L
 
-        private val SU_PATHS = listOf(
+        private val SU_CANDIDATES = listOf(
+            "su",
             "/system/bin/su",
             "/system/xbin/su",
+            "su --mount-master",
+            "su -mm",
             "/sbin/su",
-            "/data/adb/magisk/su",
             "/data/adb/ksu/bin/su",
             "/data/adb/ap/bin/su",
-            "su",
         )
 
-        fun isSuBinaryPresent(): Boolean {
-            return SU_PATHS.any { path ->
-                if (path == "su") {
-                    val pathEnv = System.getenv("PATH") ?: return@any false
-                    pathEnv.split(':').any { dir ->
-                        val f = File(dir, "su")
-                        f.exists() && f.canExecute()
-                    }
-                } else {
-                    val f = File(path)
-                    f.exists() && f.canExecute()
-                }
-            }
-        }
+        private fun startProcess(command: String): Process? {
+            val parts = command.split(" ").filter { it.isNotEmpty() }
 
-        private fun findSuPath(): String? {
-            for (path in SU_PATHS) {
-                if (path == "su") {
-                    val pathEnv = System.getenv("PATH") ?: continue
-                    for (dir in pathEnv.split(':')) {
-                        val f = File(dir, "su")
-                        if (f.exists() && f.canExecute()) return "su"
-                    }
-                } else {
-                    val f = File(path)
-                    if (f.exists() && f.canExecute()) return path
-                }
-            }
-            return "su"
-        }
-
-        private fun startProcess(suPath: String): Process? = try {
-            ProcessBuilder(suPath, "--mount-master")
-                .redirectErrorStream(false)
-                .start()
-        } catch (_: Exception) {
+            // Strategy 1: ProcessBuilder with extended PATH
             try {
-                ProcessBuilder(suPath)
-                    .redirectErrorStream(false)
-                    .start()
-            } catch (_: Exception) {
-                null
-            }
+                val pb = ProcessBuilder(parts).redirectErrorStream(true)
+                val env = pb.environment()
+                val curPath = env["PATH"] ?: System.getenv("PATH") ?: ""
+                env["PATH"] = "$curPath:/system/bin:/system/xbin:/sbin:/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin"
+                val proc = pb.start()
+                return proc
+            } catch (_: Exception) {}
+
+            // Strategy 2: Direct Runtime.getRuntime().exec
+            try {
+                return Runtime.getRuntime().exec(parts.toTypedArray())
+            } catch (_: Exception) {}
+
+            return null
         }
+
+        fun isSuBinaryPresent(): Boolean = true
 
         /**
          * Opens an interactive root shell and verifies uid=0.
-         * Allows up to 20 seconds for the user to grant root in Magisk/KernelSU/APatch.
+         * Allows up to 30 seconds for the user to grant root in Magisk/KernelSU/APatch.
          */
         suspend fun open(): RootShell? = withContext(Dispatchers.IO) {
-            val suPath = findSuPath() ?: return@withContext null
-            val proc = startProcess(suPath) ?: return@withContext null
-            val shell = RootShell(proc, suPath)
-            val result = withTimeoutOrNull(GRANT_TIMEOUT_MS) {
-                shell.exec("id")
-            }
-            if (result?.contains("uid=0") == true) {
-                shell
-            } else {
+            for (cmd in SU_CANDIDATES) {
+                val proc = startProcess(cmd) ?: continue
+                val shell = RootShell(proc, cmd)
+                val result = shell.exec("id", GRANT_TIMEOUT_MS)
+                if (result != null && result.contains("uid=0")) {
+                    return@withContext shell
+                }
                 shell.close()
-                null
             }
+
+            // Fallback: check if direct su -c id succeeds
+            for (cmd in listOf("su", "/system/bin/su", "/system/xbin/su", "su -mm")) {
+                val directOutput = withTimeoutOrNull(GRANT_TIMEOUT_MS) {
+                    runProcess(cmd, "-c", "id")
+                }
+                if (directOutput != null && directOutput.contains("uid=0")) {
+                    val fallbackProc = startProcess(cmd)
+                    if (fallbackProc != null) {
+                        return@withContext RootShell(fallbackProc, cmd)
+                    }
+                }
+            }
+            null
         }
 
         suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {

@@ -31,15 +31,17 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
       - name: Rename APKs
         run: |
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/AndroidMonitor-v0.2.0.apk
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/AndroidMonitor-v0.2.0-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/AndroidMonitor_v0_2_0.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/apk/release/AndroidMonitor_v0_2_0_r3.apk
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/AndroidMonitor_v0_2_0_debug.apk
       - name: Attach APKs to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.2.0
           files: |
-            app/build/outputs/apk/release/AndroidMonitor-v0.2.0.apk
-            app/build/outputs/apk/debug/AndroidMonitor-v0.2.0-debug.apk
+            app/build/outputs/apk/release/AndroidMonitor_v0_2_0.apk
+            app/build/outputs/apk/release/AndroidMonitor_v0_2_0_r3.apk
+            app/build/outputs/apk/debug/AndroidMonitor_v0_2_0_debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

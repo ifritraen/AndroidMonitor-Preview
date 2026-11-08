@@ -110,7 +110,7 @@ private enum class SortBy(val label: String) {
             MEMORY -> compareByDescending<ProcessGroup> { it.rssBytes }.thenByDescending { it.cpu }
             SWAP -> compareByDescending<ProcessGroup> { it.swapBytes }.thenByDescending { it.rssBytes }
             GPU -> compareByDescending<ProcessGroup> { it.cpu }
-            NETWORK -> compareByDescending<ProcessGroup> { it.rxBytesPerSec + it.txBytesPerSec }
+            NETWORK -> compareByDescending<ProcessGroup> { (it.rxBytesPerSec ?: -1L) + (it.txBytesPerSec ?: -1L) }
             POWER -> compareByDescending<ProcessGroup> { it.powerMw ?: 0f }
             THREADS -> compareByDescending<ProcessGroup> { it.threads }.thenByDescending { it.cpu }
             PID -> compareBy<ProcessGroup> { it.processes.firstOrNull()?.pid ?: 0 }
@@ -694,9 +694,15 @@ private fun ProcessRow(
             )
 
             // Network
-            val netBytes = group.rxBytesPerSec + group.txBytesPerSec
+            val netBytes = if (group.rxBytesPerSec != null && group.txBytesPerSec != null) {
+                group.rxBytesPerSec + group.txBytesPerSec
+            } else null
             HeatCell(
-                text = if (netBytes > 0) formatRate(netBytes) else "0 B/s",
+                text = when {
+                    netBytes == null -> "—"
+                    netBytes > 0 -> formatRate(netBytes)
+                    else -> "0 B/s"
+                },
                 background = Color.Transparent,
                 width = getNetColumnWidth(isCompact),
                 isCompact = isCompact,
@@ -786,7 +792,14 @@ private fun ProcessDialog(
                     KeyValue("Swap (zRAM)", formatBytes(group.swapBytes))
                 }
                 KeyValue("GPU (est)", if (group.gpu > 0f) formatPercentFine(group.gpu) else "0%")
-                KeyValue("Network", "↓ ${formatRate(group.rxBytesPerSec)}  ↑ ${formatRate(group.txBytesPerSec)}")
+                KeyValue(
+                    "Network",
+                    if (group.rxBytesPerSec != null && group.txBytesPerSec != null) {
+                        "↓ ${formatRate(group.rxBytesPerSec)}  ↑ ${formatRate(group.txBytesPerSec)}"
+                    } else {
+                        "— (OS restricted)"
+                    },
+                )
                 KeyValue("Power (est)", group.powerMw?.let { formatPower(it / 1000f) } ?: "—")
                 KeyValue("Threads", group.threads.toString())
                 KeyValue("User", group.processes.first().user)

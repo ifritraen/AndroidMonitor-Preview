@@ -110,11 +110,7 @@ class AccessManager(private val context: Context, private val settings: Settings
             AccessMode.SHIZUKU -> {
                 if (hasShizukuPermission()) bindShizuku()
             }
-            AccessMode.STANDARD -> {
-                if (!hasShizukuPermission() && RootShell.isSuBinaryPresent()) {
-                    useRoot()
-                }
-            }
+            AccessMode.STANDARD -> Unit
         }
     }
 
@@ -122,8 +118,6 @@ class AccessManager(private val context: Context, private val settings: Settings
     fun refresh() {
         refreshShizukuStatus()
         if (settings.preferredAccess == AccessMode.ROOT && shell == null && _state.value.root != RootStatus.CHECKING) {
-            useRoot()
-        } else if (settings.preferredAccess == AccessMode.STANDARD && _state.value.root == RootStatus.UNKNOWN && !hasShizukuPermission() && RootShell.isSuBinaryPresent()) {
             useRoot()
         }
     }

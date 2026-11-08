@@ -47,10 +47,13 @@ class ProcessSampler(
         val statPart = output.substringBefore(PS_MARKER)
         val afterPsMarker = output.substringAfter(PS_MARKER, "")
         val psPart = afterPsMarker.substringBefore(SWAP_MARKER)
-        val swapPart = afterPsMarker.substringAfter(SWAP_MARKER, "")
+        val afterSwapMarker = afterPsMarker.substringAfter(SWAP_MARKER, "")
+        val swapPart = afterSwapMarker.substringBefore(NET_MARKER)
+        val netPart = afterSwapMarker.substringAfter(NET_MARKER, "")
 
         val names = parsePs(psPart)
         val swaps = parseSwap(swapPart)
+        val kernelNet = parseNetStats(netPart)
 
         val elapsedSec = if (previousAt > 0) (now - previousAt) / 1000.0 else 0.0
         val elapsedTicks = elapsedSec * clockTicks * cpuCount
@@ -85,16 +88,26 @@ class ProcessSampler(
             val isKernel = stat.pid == 2 || stat.ppid == 2
             val uid = userToUid(user)
 
-            var rxRate = 0L
-            var txRate = 0L
+            var rxRate: Long? = null
+            var txRate: Long? = null
             if (uid != null && uid >= 0) {
-                val curRx = TrafficStats.getUidRxBytes(uid)
-                val curTx = TrafficStats.getUidTxBytes(uid)
+                val kn = kernelNet[uid]
+                val (curRx, curTx) = if (kn != null) {
+                    kn.rx to kn.tx
+                } else {
+                    val cr = TrafficStats.getUidRxBytes(uid)
+                    val ct = TrafficStats.getUidTxBytes(uid)
+                    if (cr >= 0 && ct >= 0) cr to ct else -1L to -1L
+                }
+
                 if (curRx >= 0 && curTx >= 0) {
                     val prev = previousNet[uid]
                     if (prev != null && elapsedSec > 0) {
                         rxRate = ((curRx - prev.rx) / elapsedSec).toLong().coerceAtLeast(0)
                         txRate = ((curTx - prev.tx) / elapsedSec).toLong().coerceAtLeast(0)
+                    } else {
+                        rxRate = 0L
+                        txRate = 0L
                     }
                     currentNet[uid] = NetCounters(curRx, curTx)
                 }
@@ -264,12 +277,36 @@ class ProcessSampler(
         return map
     }
 
+    /** Parses /proc/net/xt_qtaguid/stats (available on Android 9 and older, or custom kernels) into uid -> NetCounters. */
+    private fun parseNetStats(text: String): Map<Int, NetCounters> {
+        if (text.isEmpty()) return emptyMap()
+        val totals = HashMap<Int, NetCounters>()
+        for (line in text.lineSequence()) {
+            val parts = line.trim().split(WHITESPACE)
+            // format: idx iface acct_tag_hex uid_tag_int cnt_set rx_bytes rx_packets tx_bytes tx_packets ...
+            if (parts.size >= 9) {
+                val uid = parts[3].toIntOrNull() ?: continue
+                val rx = parts[5].toLongOrNull() ?: 0L
+                val tx = parts[7].toLongOrNull() ?: 0L
+                val existing = totals[uid]
+                if (existing != null) {
+                    totals[uid] = NetCounters(existing.rx + rx, existing.tx + tx)
+                } else {
+                    totals[uid] = NetCounters(rx, tx)
+                }
+            }
+        }
+        return totals
+    }
+
     private companion object {
         const val PS_MARKER = "@@PS"
         const val SWAP_MARKER = "@@SWAP"
+        const val NET_MARKER = "@@NET"
         const val COMMAND = "cat /proc/[0-9]*/stat 2>/dev/null; " +
             "printf '\\n$PS_MARKER\\n'; ps -A -o PID,USER,NAME 2>/dev/null; " +
-            "printf '\\n$SWAP_MARKER\\n'; grep -hE '^(Pid|VmSwap):' /proc/[0-9]*/status 2>/dev/null"
+            "printf '\\n$SWAP_MARKER\\n'; grep -hE '^(Pid|VmSwap):' /proc/[0-9]*/status 2>/dev/null; " +
+            "printf '\\n$NET_MARKER\\n'; cat /proc/net/xt_qtaguid/stats 2>/dev/null"
         val WHITESPACE = Regex("\\s+")
         val PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
         val APP_USER = Regex("u\\d+_[ai]\\d+")

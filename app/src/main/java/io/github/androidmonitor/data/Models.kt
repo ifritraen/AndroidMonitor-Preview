@@ -129,8 +129,8 @@ data class ProcessInfo(
     val gpu: Float = 0f,
     val threads: Int,
     val isKernel: Boolean,
-    val rxBytesPerSec: Long = 0L,
-    val txBytesPerSec: Long = 0L,
+    val rxBytesPerSec: Long? = null,
+    val txBytesPerSec: Long? = null,
     val powerMw: Float? = null,
 )
 
@@ -149,8 +149,12 @@ data class ProcessGroup(
     val gpu: Float = processes.sumOf { it.gpu.toDouble() }.toFloat()
     val threads: Int = processes.sumOf { it.threads }
     val isKernel: Boolean = processes.all { it.isKernel }
-    val rxBytesPerSec: Long = processes.sumOf { it.rxBytesPerSec }
-    val txBytesPerSec: Long = processes.sumOf { it.txBytesPerSec }
+    val rxBytesPerSec: Long? = if (processes.any { it.rxBytesPerSec != null }) {
+        processes.mapNotNull { it.rxBytesPerSec }.sum()
+    } else null
+    val txBytesPerSec: Long? = if (processes.any { it.txBytesPerSec != null }) {
+        processes.mapNotNull { it.txBytesPerSec }.sum()
+    } else null
     val powerMw: Float? = processes.mapNotNull { it.powerMw }.takeIf { it.isNotEmpty() }?.sum()
 
     fun matches(query: String): Boolean =

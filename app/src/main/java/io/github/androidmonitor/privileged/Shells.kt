@@ -31,25 +31,6 @@ class RootShell private constructor(
     private val isClosed = AtomicBoolean(false)
     private val lock = Any()
 
-    init {
-        drainStderr(process)
-    }
-
-    private fun drainStderr(proc: Process) {
-        Thread {
-            try {
-                val errReader = proc.errorStream.bufferedReader()
-                while (!isClosed.get()) {
-                    val line = errReader.readLine() ?: break
-                }
-            } catch (_: Exception) {}
-        }.apply {
-            isDaemon = true
-            name = "RootShell-StderrDrainer"
-            start()
-        }
-    }
-
     private fun ensureAlive(): Boolean {
         if (isClosed.get()) return false
         if (process.isAlive) return true
@@ -58,7 +39,6 @@ class RootShell private constructor(
             process = newProc
             writer = BufferedWriter(OutputStreamWriter(process.outputStream, Charsets.UTF_8))
             reader = BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8))
-            drainStderr(newProc)
             true
         } catch (_: Exception) {
             false
@@ -69,37 +49,37 @@ class RootShell private constructor(
 
     suspend fun exec(command: String, timeoutMs: Long): String? = withContext(Dispatchers.IO) {
         synchronized(lock) {
-            if (!ensureAlive()) {
-                return@withContext runProcess(suBinary, "-c", command)
-            }
-            val marker = "__AM_DONE_${UUID.randomUUID().toString().replace("-", "")}__"
-            try {
-                writer.write(command)
-                writer.write("\n")
-                writer.write("echo \"$marker \$?\"\n")
-                writer.flush()
+            if (ensureAlive()) {
+                val marker = "__AM_DONE_${UUID.randomUUID().toString().replace("-", "")}__"
+                try {
+                    writer.write(command)
+                    writer.write("\n")
+                    writer.write("echo \"$marker \$?\"\n")
+                    writer.flush()
 
-                val deadline = System.currentTimeMillis() + timeoutMs
-                val output = StringBuilder()
-                while (System.currentTimeMillis() < deadline) {
-                    if (isClosed.get()) return@withContext null
-                    if (reader.ready() || process.inputStream.available() > 0) {
-                        val line = reader.readLine() ?: break
-                        if (line.contains(marker)) {
-                            return@withContext output.toString().trimEnd('\n', '\r')
+                    val deadline = System.currentTimeMillis() + timeoutMs
+                    val output = StringBuilder()
+                    while (System.currentTimeMillis() < deadline) {
+                        if (isClosed.get()) return@withContext null
+                        if (reader.ready()) {
+                            val line = reader.readLine() ?: break
+                            if (line.contains(marker)) {
+                                return@withContext output.toString().trimEnd('\n', '\r')
+                            }
+                            if (output.isNotEmpty()) output.append('\n')
+                            output.append(line)
+                        } else {
+                            if (!process.isAlive && !reader.ready()) {
+                                break
+                            }
+                            Thread.sleep(15)
                         }
-                        if (output.isNotEmpty()) output.append('\n')
-                        output.append(line)
-                    } else {
-                        if (!process.isAlive && process.inputStream.available() == 0) {
-                            break
-                        }
-                        Thread.sleep(25)
                     }
-                }
-            } catch (_: Exception) {}
+                } catch (_: Exception) {}
+            }
         }
-        runProcess(suBinary, "-c", command)
+        // Direct execution fallback if interactive shell closed or failed:
+        runProcess(suBinary, "-c", command, timeoutMs = timeoutMs)
     }
 
     override fun close() {
@@ -121,36 +101,29 @@ class RootShell private constructor(
         private const val GRANT_TIMEOUT_MS = 30_000L
 
         private val SU_CANDIDATES = listOf(
-            "su --mount-master",
-            "su -mm",
             "su",
             "/system/bin/su",
             "/system/xbin/su",
-            "/system/bin/magisk su",
-            "magisk su",
+            "/data/adb/ksu/bin/su",
+            "/data/adb/ap/bin/su",
+            "/data/adb/magisk/su",
             "/sbin/su",
         )
 
         private fun startProcess(command: String): Process? {
-            val parts = command.split(" ").filter { it.isNotEmpty() }
-            try {
-                return Runtime.getRuntime().exec(parts.toTypedArray())
-            } catch (_: Exception) {}
-
-            try {
-                val pb = ProcessBuilder(parts)
-                return pb.start()
-            } catch (_: Exception) {}
-
-            try {
-                val pb = ProcessBuilder(parts)
-                val env = pb.environment()
-                val curPath = env["PATH"] ?: System.getenv("PATH") ?: ""
-                env["PATH"] = "$curPath:/system/bin:/system/xbin:/sbin:/data/adb/magisk"
-                return pb.start()
-            } catch (_: Exception) {}
-
-            return null
+            val parts = if (command.contains(" ")) {
+                command.split(" ").filter { it.isNotEmpty() }.toTypedArray()
+            } else {
+                arrayOf(command)
+            }
+            return try {
+                ProcessBuilder(*parts).apply {
+                    redirectErrorStream(true)
+                    environment()["PATH"] = ANDROID_SHELL_PATH
+                }.start()
+            } catch (_: Exception) {
+                null
+            }
         }
 
         fun isSuBinaryPresent(): Boolean {
@@ -159,39 +132,33 @@ class RootShell private constructor(
                 "/system/xbin/su",
                 "/sbin/su",
                 "/system/bin/magisk",
-                "/data/adb/magisk",
-                "/data/adb/ksu",
-                "/data/adb/ap",
+                "/data/adb/magisk/magisk",
+                "/data/adb/ksu/bin/ksud",
+                "/data/adb/ap/bin/su",
             )
-            if (commonPaths.any { File(it).exists() }) return true
-            return try {
-                val p = Runtime.getRuntime().exec(arrayOf("which", "su"))
-                val text = p.inputStream.bufferedReader().use { it.readText().trim() }
-                p.waitFor()
-                text.isNotEmpty()
-            } catch (_: Exception) {
-                true
-            }
+            if (commonPaths.any { runCatching { File(it).exists() }.getOrDefault(false) }) return true
+            return true
         }
 
         /**
-         * Opens an interactive root shell and verifies uid=0.
+         * Opens a root shell and verifies uid=0.
          * Allows up to 30 seconds for the user to grant root in Magisk/KernelSU/APatch.
          */
         suspend fun open(): RootShell? = withContext(Dispatchers.IO) {
             for (cmd in SU_CANDIDATES) {
-                val proc = startProcess(cmd) ?: continue
-                val shell = RootShell(proc, cmd)
-                val result = shell.exec("id", GRANT_TIMEOUT_MS)
-                if (result != null && result.contains("uid=0")) {
-                    return@withContext shell
-                }
-                shell.close()
-            }
-
-            for (cmd in listOf("su --mount-master", "su", "/system/bin/su", "/system/xbin/su")) {
-                val directOutput = runProcess(cmd, "-c", "id")
-                if (directOutput != null && directOutput.contains("uid=0")) {
+                // Step 1: Prompt the root manager and check if root is granted.
+                val testOutput = runProcess(cmd, "-c", "id", timeoutMs = GRANT_TIMEOUT_MS)
+                if (testOutput != null && testOutput.contains("uid=0")) {
+                    // Step 2: Spawn persistent interactive root shell.
+                    val proc = startProcess(cmd)
+                    if (proc != null) {
+                        val shell = RootShell(proc, cmd)
+                        val verify = shell.exec("id", 5000L)
+                        if (verify != null && verify.contains("uid=0")) {
+                            return@withContext shell
+                        }
+                        shell.close()
+                    }
                     val fallbackProc = startProcess(cmd)
                     if (fallbackProc != null) {
                         return@withContext RootShell(fallbackProc, cmd)

@@ -82,23 +82,19 @@ import io.github.androidmonitor.ui.util.formatPercentFine
 import io.github.androidmonitor.ui.util.formatPower
 import io.github.androidmonitor.ui.util.formatRate
 
-private fun getNameColumnWidth(isCompact: Boolean) = if (isCompact) 150.dp else 200.dp
-private fun getCpuColumnWidth(isCompact: Boolean) = if (isCompact) 62.dp else 76.dp
-private fun getMemoryColumnWidth(isCompact: Boolean) = if (isCompact) 84.dp else 104.dp
-private fun getSwapColumnWidth(isCompact: Boolean) = if (isCompact) 68.dp else 84.dp
-private fun getGpuColumnWidth(isCompact: Boolean) = if (isCompact) 56.dp else 68.dp
-private fun getNetColumnWidth(isCompact: Boolean) = if (isCompact) 72.dp else 88.dp
-private fun getPowerColumnWidth(isCompact: Boolean) = if (isCompact) 70.dp else 84.dp
-private fun getThreadsColumnWidth(isCompact: Boolean) = if (isCompact) 50.dp else 64.dp
-private fun getPidColumnWidth(isCompact: Boolean) = if (isCompact) 50.dp else 60.dp
+private fun getNameColumnWidth(isCompact: Boolean) = if (isCompact) 125.dp else 190.dp
+private fun getCpuColumnWidth(isCompact: Boolean) = if (isCompact) 48.dp else 72.dp
+private fun getMemoryColumnWidth(isCompact: Boolean) = if (isCompact) 68.dp else 96.dp
+private fun getGpuColumnWidth(isCompact: Boolean) = if (isCompact) 44.dp else 64.dp
+private fun getPowerColumnWidth(isCompact: Boolean) = if (isCompact) 54.dp else 80.dp
+private fun getThreadsColumnWidth(isCompact: Boolean) = if (isCompact) 36.dp else 56.dp
+private fun getPidColumnWidth(isCompact: Boolean) = if (isCompact) 42.dp else 56.dp
 
 private enum class SortBy(val label: String) {
     NAME("Name"),
     CPU("CPU"),
     MEMORY("Memory"),
-    SWAP("Swap"),
     GPU("GPU"),
-    NETWORK("Network"),
     POWER("Power"),
     THREADS("Threads"),
     PID("PID");
@@ -107,10 +103,8 @@ private enum class SortBy(val label: String) {
         val base = when (this) {
             NAME -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }
             CPU -> compareByDescending<ProcessGroup> { it.cpu }.thenByDescending { it.rssBytes }
-            MEMORY -> compareByDescending<ProcessGroup> { it.rssBytes }.thenByDescending { it.cpu }
-            SWAP -> compareByDescending<ProcessGroup> { it.swapBytes }.thenByDescending { it.rssBytes }
+            MEMORY -> compareByDescending<ProcessGroup> { it.rssBytes + it.swapBytes }.thenByDescending { it.cpu }
             GPU -> compareByDescending<ProcessGroup> { it.cpu }
-            NETWORK -> compareByDescending<ProcessGroup> { (it.rxBytesPerSec ?: -1L) + (it.txBytesPerSec ?: -1L) }
             POWER -> compareByDescending<ProcessGroup> { it.powerMw ?: 0f }
             THREADS -> compareByDescending<ProcessGroup> { it.threads }.thenByDescending { it.cpu }
             PID -> compareBy<ProcessGroup> { it.processes.firstOrNull()?.pid ?: 0 }
@@ -413,43 +407,40 @@ private fun HeaderRow(
 ) {
     val snapshot = monitor?.snapshot
     Row(
-        Modifier.fillMaxWidth().padding(start = if (isCompact) 8.dp else 16.dp),
+        Modifier.fillMaxWidth().padding(start = if (isCompact) 4.dp else 8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
-        HeaderCell("Name", null, sortBy == SortBy.NAME, Modifier.width(getNameColumnWidth(isCompact)), Alignment.Start, isCompact) {
+        HeaderCell("Name", null, null, sortBy == SortBy.NAME, Modifier.width(getNameColumnWidth(isCompact)), Alignment.Start, isCompact) {
             onSort(SortBy.NAME)
         }
         Row(Modifier.horizontalScroll(scrollState), verticalAlignment = Alignment.Bottom) {
             HeaderCell(
-                "CPU", snapshot?.cpu?.usage?.let(::formatPercent), sortBy == SortBy.CPU,
+                "CPU", snapshot?.cpu?.usage?.let(::formatPercent), null, sortBy == SortBy.CPU,
                 Modifier.width(getCpuColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.CPU) }
             HeaderCell(
-                "Memory", snapshot?.memory?.usedPercent?.let(::formatPercent), sortBy == SortBy.MEMORY,
-                Modifier.width(getMemoryColumnWidth(isCompact)), Alignment.End, isCompact,
+                label = "Memory",
+                total = snapshot?.memory?.usedPercent?.let(::formatPercent),
+                subTotal = snapshot?.memory?.swapUsedBytes?.takeIf { it > 0 }?.let { "${formatBytes(it)} swap" },
+                active = sortBy == SortBy.MEMORY,
+                modifier = Modifier.width(getMemoryColumnWidth(isCompact)),
+                alignment = Alignment.End,
+                isCompact = isCompact,
             ) { onSort(SortBy.MEMORY) }
             HeaderCell(
-                "Swap", snapshot?.memory?.swapUsedBytes?.let(::formatBytes), sortBy == SortBy.SWAP,
-                Modifier.width(getSwapColumnWidth(isCompact)), Alignment.End, isCompact,
-            ) { onSort(SortBy.SWAP) }
-            HeaderCell(
-                "GPU", snapshot?.gpu?.usage?.let(::formatPercent), sortBy == SortBy.GPU,
+                "GPU", snapshot?.gpu?.usage?.let(::formatPercent), null, sortBy == SortBy.GPU,
                 Modifier.width(getGpuColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.GPU) }
             HeaderCell(
-                "Network", snapshot?.network?.rxBytesPerSec?.let(::formatRate), sortBy == SortBy.NETWORK,
-                Modifier.width(getNetColumnWidth(isCompact)), Alignment.End, isCompact,
-            ) { onSort(SortBy.NETWORK) }
-            HeaderCell(
-                "Power (est)", snapshot?.battery?.powerW?.let(::formatPower), sortBy == SortBy.POWER,
+                "Power (est)", snapshot?.battery?.powerW?.let(::formatPower), null, sortBy == SortBy.POWER,
                 Modifier.width(getPowerColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.POWER) }
             HeaderCell(
-                "Threads", null, sortBy == SortBy.THREADS,
+                "Threads", null, null, sortBy == SortBy.THREADS,
                 Modifier.width(getThreadsColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.THREADS) }
             HeaderCell(
-                "PID", null, sortBy == SortBy.PID,
+                "PID", null, null, sortBy == SortBy.PID,
                 Modifier.width(getPidColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.PID) }
         }
@@ -460,6 +451,7 @@ private fun HeaderRow(
 private fun HeaderCell(
     label: String,
     total: String?,
+    subTotal: String? = null,
     active: Boolean,
     modifier: Modifier,
     alignment: Alignment.Horizontal,
@@ -468,16 +460,23 @@ private fun HeaderCell(
 ) {
     Column(
         modifier.clickable(onClick = onClick).padding(
-            top = if (isCompact) 4.dp else 8.dp,
-            bottom = if (isCompact) 4.dp else 8.dp,
-            end = if (isCompact) 6.dp else 12.dp,
+            top = if (isCompact) 2.dp else 8.dp,
+            bottom = if (isCompact) 2.dp else 8.dp,
+            end = if (isCompact) 4.dp else 10.dp,
         ),
         horizontalAlignment = alignment,
     ) {
         if (total != null) {
             Text(
                 total,
-                style = if (isCompact) MaterialTheme.typography.labelSmall.tabular else MaterialTheme.typography.titleMedium.tabular,
+                style = if (isCompact) MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular else MaterialTheme.typography.titleMedium.tabular,
+            )
+        }
+        if (subTotal != null) {
+            Text(
+                subTotal,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = if (isCompact) 9.sp else 10.sp).tabular,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Text(
@@ -504,9 +503,9 @@ private fun LazyListScope.groupSection(
     item(key = "section-$title") {
         Text(
             "$title (${groups.size})",
-            style = if (isCompact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall,
+            style = if (isCompact) MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold) else MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = if (isCompact) 12.dp else 24.dp, top = if (isCompact) 8.dp else 16.dp, bottom = if (isCompact) 2.dp else 6.dp),
+            modifier = Modifier.padding(start = if (isCompact) 8.dp else 24.dp, top = if (isCompact) 4.dp else 16.dp, bottom = if (isCompact) 1.dp else 6.dp),
         )
     }
     items(groups, key = { it.key }) { group ->
@@ -560,12 +559,12 @@ private fun ProcessRow(
     ) {
         // Name Column: Fixed on left with Close button + Icon + Pin + Title
         Row(
-            Modifier.width(getNameColumnWidth(isCompact)).padding(vertical = if (isCompact) 2.dp else 6.dp),
+            Modifier.width(getNameColumnWidth(isCompact)).padding(vertical = if (isCompact) 1.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val closeBoxSize = if (isCompact) 20.dp else 28.dp
-            val closeIconSize = if (isCompact) 11.dp else 15.dp
-            val iconSize = if (isCompact) 20.dp else 32.dp
+            val closeBoxSize = if (isCompact) 18.dp else 28.dp
+            val closeIconSize = if (isCompact) 10.dp else 15.dp
+            val iconSize = if (isCompact) 18.dp else 32.dp
 
             // Close button at the left side of the icon
             if (canClose) {
@@ -596,8 +595,8 @@ private fun ProcessRow(
             Box(Modifier.size(iconSize)) {
                 ProcessIcon(group, apps, size = iconSize)
                 if (group.isPinned) {
-                    val pinBadgeSize = if (isCompact) 10.dp else 14.dp
-                    val pinIconSize = if (isCompact) 7.dp else 10.dp
+                    val pinBadgeSize = if (isCompact) 8.dp else 14.dp
+                    val pinIconSize = if (isCompact) 5.dp else 10.dp
                     Box(
                         Modifier
                             .size(pinBadgeSize)
@@ -616,7 +615,7 @@ private fun ProcessRow(
                 }
             }
 
-            Spacer(Modifier.width(if (isCompact) 4.dp else 8.dp))
+            Spacer(Modifier.width(if (isCompact) 3.dp else 8.dp))
 
             Column(Modifier.weight(1f)) {
                 Text(
@@ -646,65 +645,35 @@ private fun ProcessRow(
             HeatCell(formatPercentFine(group.cpu), heat.copy(alpha = heatAlpha(group.cpu / 25f)), getCpuColumnWidth(isCompact), isCompact)
 
             // Memory (RAM + Swap under it)
-            val memoryShare = if (totalMemory > 0) group.rssBytes.toFloat() / totalMemory else 0f
+            val memoryShare = if (totalMemory > 0) (group.rssBytes + group.swapBytes).toFloat() / totalMemory else 0f
             Box(
                 Modifier
                     .width(getMemoryColumnWidth(isCompact))
                     .fillMaxHeight()
                     .background(heat.copy(alpha = heatAlpha(memoryShare * 8f)))
-                    .padding(end = if (isCompact) 6.dp else 12.dp),
+                    .padding(end = if (isCompact) 4.dp else 10.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                if (isCompact) {
+                Column(horizontalAlignment = Alignment.End) {
                     Text(
                         formatBytes(group.rssBytes),
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp).tabular,
+                        style = if (isCompact) MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp).tabular else MaterialTheme.typography.bodyMedium.tabular,
                     )
-                } else {
-                    Column(horizontalAlignment = Alignment.End) {
+                    if (group.swapBytes > 0) {
                         Text(
-                            formatBytes(group.rssBytes),
-                            style = MaterialTheme.typography.bodyMedium.tabular,
+                            "+${formatBytes(group.swapBytes)}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = if (isCompact) 9.sp else 10.sp).tabular,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        if (group.swapBytes > 0) {
-                            Text(
-                                "+${formatBytes(group.swapBytes)} swap",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
                     }
                 }
             }
-
-            // Dedicated Swap column
-            HeatCell(
-                text = if (group.swapBytes > 0) formatBytes(group.swapBytes) else "0 B",
-                background = Color.Transparent,
-                width = getSwapColumnWidth(isCompact),
-                isCompact = isCompact,
-            )
 
             // GPU (calculated from graphics thread activity and system GPU load)
             HeatCell(
                 text = if (group.gpu > 0f) formatPercentFine(group.gpu) else "0%",
                 background = heat.copy(alpha = heatAlpha(group.gpu / 25f)),
                 width = getGpuColumnWidth(isCompact),
-                isCompact = isCompact,
-            )
-
-            // Network
-            val netBytes = if (group.rxBytesPerSec != null && group.txBytesPerSec != null) {
-                group.rxBytesPerSec + group.txBytesPerSec
-            } else null
-            HeatCell(
-                text = when {
-                    netBytes == null -> "—"
-                    netBytes > 0 -> formatRate(netBytes)
-                    else -> "0 B/s"
-                },
-                background = Color.Transparent,
-                width = getNetColumnWidth(isCompact),
                 isCompact = isCompact,
             )
 
@@ -741,7 +710,7 @@ private fun HeatCell(text: String, background: Color, width: Dp, isCompact: Bool
         Text(
             text,
             style = if (isCompact) MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp).tabular else MaterialTheme.typography.bodyMedium.tabular,
-            modifier = Modifier.padding(end = if (isCompact) 6.dp else 12.dp),
+            modifier = Modifier.padding(end = if (isCompact) 4.dp else 10.dp),
         )
     }
 }

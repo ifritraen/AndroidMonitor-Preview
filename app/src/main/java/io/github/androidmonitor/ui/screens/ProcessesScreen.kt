@@ -1,5 +1,8 @@
 package io.github.androidmonitor.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -18,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Lock
@@ -39,13 +44,12 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -81,6 +85,32 @@ import io.github.androidmonitor.ui.util.formatPercent
 import io.github.androidmonitor.ui.util.formatPercentFine
 import io.github.androidmonitor.ui.util.formatPower
 import io.github.androidmonitor.ui.util.formatRate
+
+@Composable
+private fun CompactChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val bgColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    Box(
+        modifier = Modifier
+            .height(26.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(bgColor)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = contentColor,
+        )
+    }
+}
 
 private fun getNameColumnWidth(isCompact: Boolean) = if (isCompact) 125.dp else 190.dp
 private fun getCpuColumnWidth(isCompact: Boolean) = if (isCompact) 48.dp else 72.dp
@@ -152,81 +182,36 @@ fun ProcessesScreen(vm: MonitorViewModel, monitor: MonitorState?, onOpenAccess: 
 private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, monitor: MonitorState?) {
     val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }
+    var isSearching by rememberSaveable { mutableStateOf(false) }
+    var showReduceSwapDialog by remember { mutableStateOf(false) }
     var sortBy by rememberSaveable { mutableStateOf(SortBy.CPU) }
     var showKernel by rememberSaveable { mutableStateOf(false) }
     var selectedKey by remember { mutableStateOf<String?>(null) }
     val totalMemory = monitor?.snapshot?.memory?.totalBytes ?: 0L
     val pinnedKeys by vm.settings.pinnedProcesses.collectAsStateWithLifecycle()
+    val lockedKeys by vm.settings.lockedProcesses.collectAsStateWithLifecycle()
     val grouping by vm.settings.processGrouping.collectAsStateWithLifecycle()
     val isCompact by vm.settings.compactProcesses.collectAsStateWithLifecycle()
     val horizontalScrollState = rememberScrollState()
 
-    val visible = remember(state, query, sortBy, showKernel, pinnedKeys) {
+    val visible = remember(state, query, sortBy, showKernel, pinnedKeys, lockedKeys) {
         val trimmed = query.trim()
         state.groups
-            .map { it.copy(isPinned = pinnedKeys.contains(it.key)) }
+            .map { it.copy(isPinned = pinnedKeys.contains(it.key), isLocked = lockedKeys.contains(it.key)) }
             .filter { (showKernel || !it.isKernel) && (trimmed.isEmpty() || it.matches(trimmed)) }
             .sortedWith(sortBy.comparator(pinnedKeys))
     }
     val (apps, system) = remember(visible) { visible.partition { it.isApp } }
 
-    // Top Compact Bar: Title, Counts and Filter Chips
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 20.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Processes", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "${state.processCount} procs · ${state.threadCount} thr" +
-                    if (pinnedKeys.isNotEmpty()) " · ${pinnedKeys.size} pinned" else "",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilterChip(
-                selected = isCompact,
-                onClick = { vm.settings.setCompactProcesses(!isCompact) },
-                label = { Text("Compact", fontSize = 11.sp) },
-                modifier = Modifier.height(28.dp),
-            )
-            FilterChip(
-                selected = showKernel,
-                onClick = { showKernel = !showKernel },
-                label = { Text("Kernel", fontSize = 11.sp) },
-                modifier = Modifier.height(28.dp),
-            )
-            FilterChip(
-                selected = grouping == ProcessGrouping.MIXED,
-                onClick = {
-                    vm.settings.setProcessGrouping(
-                        if (grouping == ProcessGrouping.MIXED) ProcessGrouping.SEPARATE else ProcessGrouping.MIXED,
-                    )
-                },
-                label = { Text(if (grouping == ProcessGrouping.MIXED) "Mixed" else "Separated", fontSize = 11.sp) },
-                modifier = Modifier.height(28.dp),
-            )
-        }
-    }
-
-    // Compact Search Bar (34dp height)
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 4.dp)
-            .height(34.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(17.dp))
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
+    if (isSearching) {
         Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)
+                .height(34.dp)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(17.dp))
+                .padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
         ) {
             Icon(
                 Icons.Outlined.Search,
@@ -253,14 +238,104 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
                 )
             }
             if (query.isNotEmpty()) {
+                IconButton(
+                    onClick = { query = "" },
+                    modifier = Modifier.size(24.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Clear",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
+            IconButton(
+                onClick = {
+                    isSearching = false
+                    query = ""
+                },
+                modifier = Modifier.size(24.dp),
+            ) {
                 Icon(
                     Icons.Outlined.Close,
-                    contentDescription = "Clear",
+                    contentDescription = "Close search",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clickable { query = "" },
+                    modifier = Modifier.size(16.dp),
                 )
+            }
+        }
+    } else {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val pinnedCount = pinnedKeys.size
+                val lockedCount = lockedKeys.size
+                val extraInfo = buildString {
+                    if (pinnedCount > 0) append(" · ${pinnedCount}📌")
+                    if (lockedCount > 0) append(" · ${lockedCount}🔒")
+                }
+                Text(
+                    "${state.processCount} procs · ${state.threadCount} thr$extraInfo",
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CompactChip(
+                    label = "Compact",
+                    selected = isCompact,
+                    onClick = { vm.settings.setCompactProcesses(!isCompact) },
+                )
+                CompactChip(
+                    label = "Kernel",
+                    selected = showKernel,
+                    onClick = { showKernel = !showKernel },
+                )
+                CompactChip(
+                    label = "Unified",
+                    selected = grouping == ProcessGrouping.MIXED,
+                    onClick = {
+                        vm.settings.setProcessGrouping(
+                            if (grouping == ProcessGrouping.MIXED) ProcessGrouping.SEPARATE else ProcessGrouping.MIXED,
+                        )
+                    },
+                )
+                IconButton(
+                    onClick = { showReduceSwapDialog = true },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.CleaningServices,
+                        contentDescription = "Reduce Swap",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(
+                    onClick = { isSearching = true },
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Search,
+                        contentDescription = "Search",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }
@@ -364,20 +439,40 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     val selected = selectedKey?.let { key -> state.groups.firstOrNull { it.key == key } }
     if (selected != null) {
         val isPinned = pinnedKeys.contains(selected.key)
+        val isLocked = lockedKeys.contains(selected.key)
         ProcessDialog(
             group = selected,
             canEnd = selected.packageName != null && selected.packageName != context.packageName,
             isPinned = isPinned,
+            isLocked = isLocked,
             onDismiss = { selectedKey = null },
             onTogglePin = {
                 vm.togglePin(selected)
                 Toast.makeText(context, if (!isPinned) "Pinned ${selected.label}" else "Unpinned ${selected.label}", Toast.LENGTH_SHORT).show()
             },
+            onToggleLock = {
+                vm.toggleLock(selected) { ok ->
+                    val action = if (!isLocked) "Locked in RAM" else "Unlocked RAM for"
+                    val status = if (ok) "" else " (Priority command had warnings)"
+                    Toast.makeText(context, "$action ${selected.label}$status", Toast.LENGTH_SHORT).show()
+                }
+            },
             onPinToHud = {
-                vm.settings.setOverlaySingleProcessKey(selected.key)
-                vm.settings.setOverlayType(OverlayType.SINGLE_PROCESS)
-                MonitorOverlayService.update(context)
-                Toast.makeText(context, "Set ${selected.label} for HUD overlay", Toast.LENGTH_SHORT).show()
+                if (!Settings.canDrawOverlays(context)) {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    context.startActivity(intent)
+                    Toast.makeText(context, "Grant overlay permission to show HUD", Toast.LENGTH_LONG).show()
+                } else {
+                    vm.settings.setOverlaySingleProcessKey(selected.key)
+                    vm.settings.setOverlayType(OverlayType.SINGLE_PROCESS)
+                    vm.settings.setOverlayEnabled(true)
+                    MonitorOverlayService.start(context)
+                    MonitorOverlayService.update(context)
+                    Toast.makeText(context, "Pinned ${selected.label} to HUD", Toast.LENGTH_SHORT).show()
+                }
             },
             onEnd = {
                 selectedKey = null
@@ -391,6 +486,35 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
                 vm.forceStop(selected) { ok ->
                     val message = if (ok) "Force stopped ${selected.label}" else "Couldn't force stop ${selected.label}"
                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+            },
+        )
+    }
+
+    if (showReduceSwapDialog) {
+        val swapUsed = monitor?.snapshot?.memory?.swapUsedBytes ?: 0L
+        val memoryPercent = monitor?.snapshot?.memory?.usedPercent ?: 0f
+        val candidateApps = remember(state.groups, pinnedKeys, lockedKeys) {
+            state.groups.filter { group ->
+                group.isApp &&
+                    group.packageName != null &&
+                    group.packageName != context.packageName &&
+                    !pinnedKeys.contains(group.key) &&
+                    !lockedKeys.contains(group.key)
+            }.sortedByDescending { it.swapBytes + it.rssBytes }
+        }
+
+        ReduceSwapDialog(
+            swapUsedBytes = swapUsed,
+            memoryPercent = memoryPercent,
+            candidateApps = candidateApps,
+            onDismiss = { showReduceSwapDialog = false },
+            onClean = { selectedPackages ->
+                showReduceSwapDialog = false
+                Toast.makeText(context, "Cleaning ${selectedPackages.size} background apps & compacting zRAM...", Toast.LENGTH_SHORT).show()
+                vm.reduceSwap(selectedPackages) { freedBytes ->
+                    val freedText = if (freedBytes > 0) "Freed ${formatBytes(freedBytes)} swap!" else "Cleanup complete!"
+                    Toast.makeText(context, freedText, Toast.LENGTH_LONG).show()
                 }
             },
         )
@@ -432,7 +556,7 @@ private fun HeaderRow(
                 Modifier.width(getGpuColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.GPU) }
             HeaderCell(
-                "Power (est)", snapshot?.battery?.powerW?.let(::formatPower), null, sortBy == SortBy.POWER,
+                "Power", snapshot?.battery?.powerW?.let(::formatPower), null, sortBy == SortBy.POWER,
                 Modifier.width(getPowerColumnWidth(isCompact)), Alignment.End, isCompact,
             ) { onSort(SortBy.POWER) }
             HeaderCell(
@@ -591,7 +715,7 @@ private fun ProcessRow(
 
             Spacer(Modifier.width(if (isCompact) 2.dp else 4.dp))
 
-            // Process Icon + Pin Badge
+            // Process Icon + Pin/Lock Badges
             Box(Modifier.size(iconSize)) {
                 ProcessIcon(group, apps, size = iconSize)
                 if (group.isPinned) {
@@ -610,6 +734,25 @@ private fun ProcessRow(
                             contentDescription = "Pinned",
                             tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(pinIconSize),
+                        )
+                    }
+                }
+                if (group.isLocked) {
+                    val lockBadgeSize = if (isCompact) 8.dp else 14.dp
+                    val lockIconSize = if (isCompact) 5.dp else 10.dp
+                    Box(
+                        Modifier
+                            .size(lockBadgeSize)
+                            .align(Alignment.BottomEnd)
+                            .clip(CircleShape)
+                            .background(Color(0xFFFFB300)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Lock,
+                            contentDescription = "Locked in RAM",
+                            tint = Color.Black,
+                            modifier = Modifier.size(lockIconSize),
                         )
                     }
                 }
@@ -743,8 +886,10 @@ private fun ProcessDialog(
     group: ProcessGroup,
     canEnd: Boolean,
     isPinned: Boolean,
+    isLocked: Boolean,
     onDismiss: () -> Unit,
     onTogglePin: () -> Unit,
+    onToggleLock: () -> Unit,
     onPinToHud: () -> Unit,
     onEnd: () -> Unit,
     onForceStop: () -> Unit,
@@ -769,10 +914,11 @@ private fun ProcessDialog(
                         "— (OS restricted)"
                     },
                 )
-                KeyValue("Power (est)", group.powerMw?.let { formatPower(it / 1000f) } ?: "—")
+                KeyValue("Power", group.powerMw?.let { formatPower(it / 1000f) } ?: "—")
                 KeyValue("Threads", group.threads.toString())
                 KeyValue("User", group.processes.first().user)
                 KeyValue("Pinned", if (isPinned) "Yes" else "No")
+                KeyValue("Locked in RAM", if (isLocked) "Yes (Unkillable)" else "No")
                 Spacer(Modifier.height(4.dp))
                 Text("Processes (${group.processes.size})", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 group.processes.take(8).forEach { p ->
@@ -788,34 +934,181 @@ private fun ProcessDialog(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Note: GPU and Power are estimated based on graphics thread activity, system GPU load, and CPU proportion.",
+                    "Note: GPU is estimated based on graphics thread activity and system GPU load. Locked apps have OOM score 0 and battery exemption to avoid being killed in background.",
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onTogglePin) {
-                    Text(if (isPinned) "Unpin" else "Pin")
-                }
-                TextButton(onClick = onPinToHud) {
-                    Text("Pin to HUD")
-                }
-                if (canEnd) {
-                    TextButton(onClick = onForceStop) {
-                        Text("Force stop", color = MaterialTheme.colorScheme.error)
+            Column(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onTogglePin) {
+                        Text(if (isPinned) "Unpin" else "Pin")
                     }
-                    TextButton(onClick = onEnd) {
-                        Text("End task")
+                    TextButton(onClick = onToggleLock) {
+                        Text(if (isLocked) "Unlock RAM" else "Lock in RAM")
                     }
-                } else {
-                    TextButton(onClick = onDismiss) { Text("Close") }
+                    TextButton(onClick = onPinToHud) {
+                        Text("Pin to HUD")
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    if (canEnd) {
+                        TextButton(onClick = onForceStop) {
+                            Text("Force stop", color = MaterialTheme.colorScheme.error)
+                        }
+                        TextButton(onClick = onEnd) {
+                            Text("End task")
+                        }
+                    } else {
+                        TextButton(onClick = onDismiss) { Text("Close") }
+                    }
                 }
             }
         },
         dismissButton = {
             if (canEnd) TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun ReduceSwapDialog(
+    swapUsedBytes: Long,
+    memoryPercent: Float,
+    candidateApps: List<ProcessGroup>,
+    onDismiss: () -> Unit,
+    onClean: (Set<String>) -> Unit,
+) {
+    var selectedPkgs by remember {
+        mutableStateOf(candidateApps.mapNotNull { it.packageName }.toSet())
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.CleaningServices, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("Reduce Swap & Clean RAM")
+            }
+        },
+        text = {
+            Column(Modifier.fillMaxWidth()) {
+                Text(
+                    "RAM: ${formatPercent(memoryPercent)} · Swap (zRAM): ${formatBytes(swapUsedBytes)}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Reclaims background app memory safely. Pinned and locked apps are protected and exempted.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${selectedPkgs.size} of ${candidateApps.size} apps selected",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(
+                        onClick = {
+                            selectedPkgs = if (selectedPkgs.size == candidateApps.size) {
+                                emptySet()
+                            } else {
+                                candidateApps.mapNotNull { it.packageName }.toSet()
+                            }
+                        },
+                    ) {
+                        Text(if (selectedPkgs.size == candidateApps.size) "Deselect all" else "Select all", fontSize = 12.sp)
+                    }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+                if (candidateApps.isEmpty()) {
+                    Text(
+                        "No background apps eligible for cleanup (all running apps are pinned, locked, or system).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                } else {
+                    LazyColumn(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 240.dp),
+                    ) {
+                        items(candidateApps, key = { it.key }) { group ->
+                            val pkg = group.packageName ?: return@items
+                            val isChecked = selectedPkgs.contains(pkg)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        selectedPkgs = if (isChecked) selectedPkgs - pkg else selectedPkgs + pkg
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { checked ->
+                                        selectedPkgs = if (checked) selectedPkgs + pkg else selectedPkgs - pkg
+                                    },
+                                    modifier = Modifier.size(24.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        group.label,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val swapInfo = if (group.swapBytes > 0) "+${formatBytes(group.swapBytes)} swap" else "0 swap"
+                                    Text(
+                                        "${formatBytes(group.rssBytes)} RAM · $swapInfo",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Root actions: Drops OS caches & triggers zRAM memory compaction.",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onClean(selectedPkgs) },
+            ) {
+                Text("Clean (${selectedPkgs.size})")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
         },
     )
 }

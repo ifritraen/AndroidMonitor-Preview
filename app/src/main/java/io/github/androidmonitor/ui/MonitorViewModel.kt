@@ -51,6 +51,28 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         settings.togglePinProcess(group.key)
     }
 
+    fun toggleLock(group: ProcessGroup, onResult: ((Boolean) -> Unit)? = null) {
+        val willLock = !settings.isProcessLocked(group.key)
+        settings.toggleLockProcess(group.key)
+        viewModelScope.launch {
+            val ok = processSampler.setProcessPriority(group, willLock)
+            onResult?.invoke(ok)
+        }
+    }
+
+    fun reduceSwap(targetPackages: Set<String>, onResult: (Long) -> Unit) {
+        val pinnedKeys = settings.pinnedProcesses.value
+        val lockedKeys = settings.lockedProcesses.value
+        val exempt = mutableSetOf(app.packageName)
+        for (key in pinnedKeys + lockedKeys) {
+            if (key.startsWith("pkg:")) exempt.add(key.removePrefix("pkg:"))
+        }
+        viewModelScope.launch {
+            val freed = processSampler.reduceSwap(targetPackages, exempt)
+            onResult(freed)
+        }
+    }
+
     private fun <T> poll(minIntervalMs: Long = 0, sample: suspend () -> T): Flow<T> = flow {
         while (true) {
             emit(sample())

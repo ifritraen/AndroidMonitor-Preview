@@ -30,6 +30,11 @@ class SettingsStore(context: Context) {
     )
     val pinnedProcesses: StateFlow<Set<String>> = _pinnedProcesses.asStateFlow()
 
+    private val _lockedProcesses = MutableStateFlow(
+        prefs.getStringSet(KEY_LOCKED_PROCESSES, emptySet())?.toSet() ?: emptySet()
+    )
+    val lockedProcesses: StateFlow<Set<String>> = _lockedProcesses.asStateFlow()
+
     private val _overlayEnabled = MutableStateFlow(prefs.getBoolean(KEY_OVERLAY_ENABLED, false))
     val overlayEnabled: StateFlow<Boolean> = _overlayEnabled.asStateFlow()
 
@@ -91,6 +96,20 @@ class SettingsStore(context: Context) {
 
     fun isProcessPinned(key: String): Boolean = _pinnedProcesses.value.contains(key)
 
+    fun toggleLockProcess(key: String) {
+        val current = _lockedProcesses.value.toMutableSet()
+        if (current.contains(key)) {
+            current.remove(key)
+        } else {
+            current.add(key)
+        }
+        val immutable = current.toSet()
+        prefs.edit { putStringSet(KEY_LOCKED_PROCESSES, immutable) }
+        _lockedProcesses.value = immutable
+    }
+
+    fun isProcessLocked(key: String): Boolean = _lockedProcesses.value.contains(key)
+
     fun setOverlayEnabled(enabled: Boolean) {
         prefs.edit { putBoolean(KEY_OVERLAY_ENABLED, enabled) }
         _overlayEnabled.value = enabled
@@ -141,6 +160,7 @@ class SettingsStore(context: Context) {
         private const val KEY_DEFAULT_TAB = "default_tab"
         private const val KEY_PROCESS_GROUPING = "process_grouping"
         private const val KEY_PINNED_PROCESSES = "pinned_processes"
+        private const val KEY_LOCKED_PROCESSES = "locked_processes"
         private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
         private const val KEY_OVERLAY_TYPE = "overlay_type"
         private const val KEY_OVERLAY_TOP_COUNT = "overlay_top_count"

@@ -142,6 +142,7 @@ data class ProcessGroup(
     val processes: List<ProcessInfo>,
     val isApp: Boolean,
     val isPinned: Boolean = false,
+    val isLocked: Boolean = false,
 ) {
     val cpu: Float = processes.sumOf { it.cpu.toDouble() }.toFloat()
     val rssBytes: Long = processes.sumOf { it.rssBytes }

@@ -120,24 +120,58 @@ private fun getPowerColumnWidth(isCompact: Boolean) = if (isCompact) 54.dp else 
 private fun getThreadsColumnWidth(isCompact: Boolean) = if (isCompact) 36.dp else 56.dp
 private fun getPidColumnWidth(isCompact: Boolean) = if (isCompact) 42.dp else 56.dp
 
-private enum class SortBy(val label: String) {
-    NAME("Name"),
+private enum class MemorySortMode {
+    RAM_DESC,
+    SWAP_DESC,
+    RAM_ASC,
+    SWAP_ASC,
+}
+
+private enum class SortBy(val label: String, val defaultAscending: Boolean = false) {
+    NAME("Name", defaultAscending = true),
     CPU("CPU"),
     MEMORY("Memory"),
     GPU("GPU"),
     POWER("Power"),
     THREADS("Threads"),
-    PID("PID");
+    PID("PID", defaultAscending = true);
 
-    fun comparator(pinnedKeys: Set<String>): Comparator<ProcessGroup> {
+    fun comparator(
+        pinnedKeys: Set<String>,
+        ascending: Boolean,
+        memoryMode: MemorySortMode,
+    ): Comparator<ProcessGroup> {
         val base = when (this) {
-            NAME -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }
-            CPU -> compareByDescending<ProcessGroup> { it.cpu }.thenByDescending { it.rssBytes }
-            MEMORY -> compareByDescending<ProcessGroup> { it.rssBytes + it.swapBytes }.thenByDescending { it.cpu }
-            GPU -> compareByDescending<ProcessGroup> { it.cpu }
-            POWER -> compareByDescending<ProcessGroup> { it.powerMw ?: 0f }
-            THREADS -> compareByDescending<ProcessGroup> { it.threads }.thenByDescending { it.cpu }
-            PID -> compareBy<ProcessGroup> { it.processes.firstOrNull()?.pid ?: 0 }
+            NAME -> {
+                val c = compareBy<ProcessGroup, String>(String.CASE_INSENSITIVE_ORDER) { it.label }
+                if (ascending) c else c.reversed()
+            }
+            CPU -> {
+                val c = compareByDescending<ProcessGroup> { it.cpu }.thenByDescending { it.rssBytes }
+                if (ascending) c.reversed() else c
+            }
+            MEMORY -> when (memoryMode) {
+                MemorySortMode.RAM_DESC -> compareByDescending<ProcessGroup> { it.rssBytes }.thenByDescending { it.cpu }
+                MemorySortMode.SWAP_DESC -> compareByDescending<ProcessGroup> { it.swapBytes }.thenByDescending { it.rssBytes }
+                MemorySortMode.RAM_ASC -> compareBy<ProcessGroup> { it.rssBytes }.thenBy { it.cpu }
+                MemorySortMode.SWAP_ASC -> compareBy<ProcessGroup> { it.swapBytes }.thenBy { it.rssBytes }
+            }
+            GPU -> {
+                val c = compareByDescending<ProcessGroup> { it.gpu }.thenByDescending { it.cpu }
+                if (ascending) c.reversed() else c
+            }
+            POWER -> {
+                val c = compareByDescending<ProcessGroup> { it.powerMw ?: 0f }.thenByDescending { it.cpu }
+                if (ascending) c.reversed() else c
+            }
+            THREADS -> {
+                val c = compareByDescending<ProcessGroup> { it.threads }.thenByDescending { it.cpu }
+                if (ascending) c.reversed() else c
+            }
+            PID -> {
+                val c = compareBy<ProcessGroup> { it.processes.firstOrNull()?.pid ?: 0 }
+                if (ascending) c else c.reversed()
+            }
         }
         return compareByDescending<ProcessGroup> { pinnedKeys.contains(it.key) }.then(base)
     }
@@ -185,6 +219,8 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     var isSearching by rememberSaveable { mutableStateOf(false) }
     var showReduceSwapDialog by remember { mutableStateOf(false) }
     var sortBy by rememberSaveable { mutableStateOf(SortBy.CPU) }
+    var sortAscending by rememberSaveable { mutableStateOf(false) }
+    var memorySortMode by rememberSaveable { mutableStateOf(MemorySortMode.RAM_DESC) }
     var showKernel by rememberSaveable { mutableStateOf(false) }
     var selectedKey by remember { mutableStateOf<String?>(null) }
     val totalMemory = monitor?.snapshot?.memory?.totalBytes ?: 0L
@@ -194,12 +230,12 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     val isCompact by vm.settings.compactProcesses.collectAsStateWithLifecycle()
     val horizontalScrollState = rememberScrollState()
 
-    val visible = remember(state, query, sortBy, showKernel, pinnedKeys, lockedKeys) {
+    val visible = remember(state, query, sortBy, sortAscending, memorySortMode, showKernel, pinnedKeys, lockedKeys) {
         val trimmed = query.trim()
         state.groups
             .map { it.copy(isPinned = pinnedKeys.contains(it.key), isLocked = lockedKeys.contains(it.key)) }
             .filter { (showKernel || !it.isKernel) && (trimmed.isEmpty() || it.matches(trimmed)) }
-            .sortedWith(sortBy.comparator(pinnedKeys))
+            .sortedWith(sortBy.comparator(pinnedKeys, sortAscending, memorySortMode))
     }
     val (apps, system) = remember(visible) { visible.partition { it.isApp } }
 
@@ -340,7 +376,36 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
         }
     }
 
-    HeaderRow(sortBy, { sortBy = it }, monitor, horizontalScrollState, isCompact)
+    HeaderRow(
+        sortBy = sortBy,
+        sortAscending = sortAscending,
+        memorySortMode = memorySortMode,
+        onSort = { clicked ->
+            if (clicked == SortBy.MEMORY) {
+                if (sortBy != SortBy.MEMORY) {
+                    sortBy = SortBy.MEMORY
+                    memorySortMode = MemorySortMode.RAM_DESC
+                } else {
+                    memorySortMode = when (memorySortMode) {
+                        MemorySortMode.RAM_DESC -> MemorySortMode.SWAP_DESC
+                        MemorySortMode.SWAP_DESC -> MemorySortMode.RAM_ASC
+                        MemorySortMode.RAM_ASC -> MemorySortMode.SWAP_ASC
+                        MemorySortMode.SWAP_ASC -> MemorySortMode.RAM_DESC
+                    }
+                }
+            } else {
+                if (sortBy == clicked) {
+                    sortAscending = !sortAscending
+                } else {
+                    sortBy = clicked
+                    sortAscending = clicked.defaultAscending
+                }
+            }
+        },
+        monitor = monitor,
+        scrollState = horizontalScrollState,
+        isCompact = isCompact,
+    )
     HorizontalDivider()
 
     LazyColumn(
@@ -524,6 +589,8 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
 @Composable
 private fun HeaderRow(
     sortBy: SortBy,
+    sortAscending: Boolean,
+    memorySortMode: MemorySortMode,
     onSort: (SortBy) -> Unit,
     monitor: MonitorState?,
     scrollState: ScrollState,
@@ -534,38 +601,86 @@ private fun HeaderRow(
         Modifier.fillMaxWidth().padding(start = if (isCompact) 4.dp else 8.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
-        HeaderCell("Name", null, null, sortBy == SortBy.NAME, Modifier.width(getNameColumnWidth(isCompact)), Alignment.Start, isCompact) {
+        HeaderCell(
+            label = "Name",
+            total = null,
+            subTotal = null,
+            active = sortBy == SortBy.NAME,
+            ascending = sortAscending,
+            modifier = Modifier.width(getNameColumnWidth(isCompact)),
+            alignment = Alignment.Start,
+            isCompact = isCompact,
+        ) {
             onSort(SortBy.NAME)
         }
         Row(Modifier.horizontalScroll(scrollState), verticalAlignment = Alignment.Bottom) {
             HeaderCell(
-                "CPU", snapshot?.cpu?.usage?.let(::formatPercent), null, sortBy == SortBy.CPU,
-                Modifier.width(getCpuColumnWidth(isCompact)), Alignment.End, isCompact,
+                label = "CPU",
+                total = snapshot?.cpu?.usage?.let(::formatPercent),
+                subTotal = null,
+                active = sortBy == SortBy.CPU,
+                ascending = sortAscending,
+                modifier = Modifier.width(getCpuColumnWidth(isCompact)),
+                alignment = Alignment.End,
+                isCompact = isCompact,
             ) { onSort(SortBy.CPU) }
+
+            val memoryLabel = if (sortBy == SortBy.MEMORY && (memorySortMode == MemorySortMode.SWAP_DESC || memorySortMode == MemorySortMode.SWAP_ASC)) {
+                "Swap"
+            } else {
+                "Memory"
+            }
+            val memoryAsc = memorySortMode == MemorySortMode.RAM_ASC || memorySortMode == MemorySortMode.SWAP_ASC
             HeaderCell(
-                label = "Memory",
+                label = memoryLabel,
                 total = snapshot?.memory?.usedPercent?.let(::formatPercent),
                 subTotal = snapshot?.memory?.swapUsedBytes?.takeIf { it > 0 }?.let { "${formatBytes(it)} swap" },
                 active = sortBy == SortBy.MEMORY,
+                ascending = memoryAsc,
                 modifier = Modifier.width(getMemoryColumnWidth(isCompact)),
                 alignment = Alignment.End,
                 isCompact = isCompact,
             ) { onSort(SortBy.MEMORY) }
+
             HeaderCell(
-                "GPU", snapshot?.gpu?.usage?.let(::formatPercent), null, sortBy == SortBy.GPU,
-                Modifier.width(getGpuColumnWidth(isCompact)), Alignment.End, isCompact,
+                label = "GPU",
+                total = snapshot?.gpu?.usage?.let(::formatPercent),
+                subTotal = null,
+                active = sortBy == SortBy.GPU,
+                ascending = sortAscending,
+                modifier = Modifier.width(getGpuColumnWidth(isCompact)),
+                alignment = Alignment.End,
+                isCompact = isCompact,
             ) { onSort(SortBy.GPU) }
             HeaderCell(
-                "Power", snapshot?.battery?.powerW?.let(::formatPower), null, sortBy == SortBy.POWER,
-                Modifier.width(getPowerColumnWidth(isCompact)), Alignment.End, isCompact,
+                label = "Power",
+                total = snapshot?.battery?.powerW?.let(::formatPower),
+                subTotal = null,
+                active = sortBy == SortBy.POWER,
+                ascending = sortAscending,
+                modifier = Modifier.width(getPowerColumnWidth(isCompact)),
+                alignment = Alignment.End,
+                isCompact = isCompact,
             ) { onSort(SortBy.POWER) }
             HeaderCell(
-                "Threads", null, null, sortBy == SortBy.THREADS,
-                Modifier.width(getThreadsColumnWidth(isCompact)), Alignment.End, isCompact,
+                label = "Threads",
+                total = null,
+                subTotal = null,
+                active = sortBy == SortBy.THREADS,
+                ascending = sortAscending,
+                modifier = Modifier.width(getThreadsColumnWidth(isCompact)),
+                alignment = Alignment.End,
+                isCompact = isCompact,
             ) { onSort(SortBy.THREADS) }
             HeaderCell(
-                "PID", null, null, sortBy == SortBy.PID,
-                Modifier.width(getPidColumnWidth(isCompact)), Alignment.End, isCompact,
+                label = "PID",
+                total = null,
+                subTotal = null,
+                active = sortBy == SortBy.PID,
+                ascending = sortAscending,
+                modifier = Modifier.width(getPidColumnWidth(isCompact)),
+                alignment = Alignment.End,
+                isCompact = isCompact,
             ) { onSort(SortBy.PID) }
         }
     }
@@ -577,6 +692,7 @@ private fun HeaderCell(
     total: String?,
     subTotal: String? = null,
     active: Boolean,
+    ascending: Boolean = false,
     modifier: Modifier,
     alignment: Alignment.Horizontal,
     isCompact: Boolean = false,
@@ -604,7 +720,7 @@ private fun HeaderCell(
             )
         }
         Text(
-            if (active) "$label ${if (label == "Name") "↑" else "↓"}" else label,
+            if (active) "$label ${if (ascending) "↑" else "↓"}" else label,
             style = if (isCompact) MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp) else MaterialTheme.typography.labelMedium,
             color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )

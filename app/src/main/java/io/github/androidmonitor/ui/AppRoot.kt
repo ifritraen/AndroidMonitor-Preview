@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.AdminPanelSettings
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationRail
@@ -38,6 +39,7 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,10 +67,12 @@ import io.github.androidmonitor.data.DefaultTab
 import io.github.androidmonitor.ui.screens.AccessScreen
 import io.github.androidmonitor.ui.screens.PerformanceScreen
 import io.github.androidmonitor.ui.screens.ProcessesScreen
+import io.github.androidmonitor.ui.screens.UtilitiesScreen
 
 enum class Destination(val label: String, val icon: ImageVector) {
     PERFORMANCE("Performance", Icons.Outlined.Speed),
     PROCESSES("Processes", Icons.AutoMirrored.Outlined.ViewList),
+    UTILITIES("Utilities", Icons.Outlined.Tune),
     ACCESS("Access", Icons.Outlined.AdminPanelSettings),
 }
 
@@ -85,6 +89,11 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
     val monitor by vm.monitor.collectAsStateWithLifecycle()
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.access.refresh() }
+    LaunchedEffect(Unit) {
+        if (vm.settings.anyAutoUtilityEnabled) {
+            vm.syncUtilityService()
+        }
+    }
     BackHandler(enabled = destination != Destination.PERFORMANCE) { destination = Destination.PERFORMANCE }
 
     // Scroll connection for scrollable containers
@@ -136,6 +145,7 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
                     when (destination) {
                         Destination.PERFORMANCE -> PerformanceScreen(monitor, wide, openAccess)
                         Destination.PROCESSES -> ProcessesScreen(vm, monitor, openAccess)
+                        Destination.UTILITIES -> UtilitiesScreen(vm, openAccess)
                         Destination.ACCESS -> AccessScreen(vm)
                     }
                 }
@@ -193,12 +203,12 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
                             tonalElevation = 6.dp,
                             shadowElevation = 8.dp,
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-                            modifier = Modifier.height(46.dp),
+                            modifier = Modifier.height(44.dp),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
                                 Destination.entries.forEach { d ->
                                     val isSelected = destination == d
@@ -215,21 +225,22 @@ fun AppRoot(vm: MonitorViewModel = viewModel()) {
                                                 },
                                             )
                                             .clickable { destination = d }
-                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                            .padding(horizontal = 9.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                                     ) {
                                         Icon(
                                             d.icon,
                                             contentDescription = d.label,
                                             tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else inactiveColor,
-                                            modifier = Modifier.size(17.dp),
+                                            modifier = Modifier.size(16.dp),
                                         )
                                         Text(
                                             d.label,
+                                            maxLines = 1,
                                             style = MaterialTheme.typography.labelMedium.copy(
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                fontSize = 11.5.sp,
+                                                fontSize = 11.sp,
                                             ),
                                             color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else inactiveColor,
                                         )

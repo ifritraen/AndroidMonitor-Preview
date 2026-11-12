@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.Close
@@ -226,6 +227,9 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     val totalMemory = monitor?.snapshot?.memory?.totalBytes ?: 0L
     val pinnedKeys by vm.settings.pinnedProcesses.collectAsStateWithLifecycle()
     val lockedKeys by vm.settings.lockedProcesses.collectAsStateWithLifecycle()
+    val autoForceStopApps by vm.settings.autoForceStopApps.collectAsStateWithLifecycle()
+    val autoThermalApps by vm.settings.autoThermalApps.collectAsStateWithLifecycle()
+    val autoRamCleanApps by vm.settings.autoRamCleanApps.collectAsStateWithLifecycle()
     val grouping by vm.settings.processGrouping.collectAsStateWithLifecycle()
     val isCompact by vm.settings.compactProcesses.collectAsStateWithLifecycle()
     val horizontalScrollState = rememberScrollState()
@@ -505,11 +509,36 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     if (selected != null) {
         val isPinned = pinnedKeys.contains(selected.key)
         val isLocked = lockedKeys.contains(selected.key)
+        val pkg = selected.packageName
+        val inForceStop = pkg != null && autoForceStopApps.contains(pkg)
+        val inThermal = pkg != null && autoThermalApps.contains(pkg)
+        val inRamClean = pkg != null && autoRamCleanApps.contains(pkg)
         ProcessDialog(
             group = selected,
-            canEnd = selected.packageName != null && selected.packageName != context.packageName,
+            canEnd = pkg != null && pkg != context.packageName,
             isPinned = isPinned,
             isLocked = isLocked,
+            inForceStop = inForceStop,
+            inThermal = inThermal,
+            inRamClean = inRamClean,
+            onToggleForceStopList = {
+                if (pkg != null) {
+                    vm.settings.toggleAutoForceStopApp(pkg)
+                    Toast.makeText(context, if (!inForceStop) "Added ${selected.label} to Auto Force Stop" else "Removed ${selected.label} from Auto Force Stop", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onToggleThermalList = {
+                if (pkg != null) {
+                    vm.settings.toggleAutoThermalApp(pkg)
+                    Toast.makeText(context, if (!inThermal) "Added ${selected.label} to Auto Thermal Reduce" else "Removed ${selected.label} from Auto Thermal Reduce", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onToggleRamCleanList = {
+                if (pkg != null) {
+                    vm.settings.toggleAutoRamCleanApp(pkg)
+                    Toast.makeText(context, if (!inRamClean) "Added ${selected.label} to Auto RAM Clean" else "Removed ${selected.label} from Auto RAM Clean", Toast.LENGTH_SHORT).show()
+                }
+            },
             onDismiss = { selectedKey = null },
             onTogglePin = {
                 vm.togglePin(selected)
@@ -1003,6 +1032,12 @@ private fun ProcessDialog(
     canEnd: Boolean,
     isPinned: Boolean,
     isLocked: Boolean,
+    inForceStop: Boolean,
+    inThermal: Boolean,
+    inRamClean: Boolean,
+    onToggleForceStopList: () -> Unit,
+    onToggleThermalList: () -> Unit,
+    onToggleRamCleanList: () -> Unit,
     onDismiss: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleLock: () -> Unit,
@@ -1014,7 +1049,12 @@ private fun ProcessDialog(
         onDismissRequest = onDismiss,
         title = { Text(group.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 group.packageName?.let { KeyValue("Package", it) }
                 KeyValue("CPU", formatPercentFine(group.cpu))
                 KeyValue("RAM", formatBytes(group.rssBytes))
@@ -1035,6 +1075,34 @@ private fun ProcessDialog(
                 KeyValue("User", group.processes.first().user)
                 KeyValue("Pinned", if (isPinned) "Yes" else "No")
                 KeyValue("Locked in RAM", if (isLocked) "Yes (Unkillable)" else "No")
+                if (canEnd) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Utilities lists",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        CompactChip(
+                            label = if (inForceStop) "✓ Auto Force Stop" else "+ Auto Force Stop",
+                            selected = inForceStop,
+                            onClick = onToggleForceStopList,
+                        )
+                        CompactChip(
+                            label = if (inThermal) "✓ Thermal Reduce" else "+ Thermal Reduce",
+                            selected = inThermal,
+                            onClick = onToggleThermalList,
+                        )
+                        CompactChip(
+                            label = if (inRamClean) "✓ Auto RAM Clean" else "+ Auto RAM Clean",
+                            selected = inRamClean,
+                            onClick = onToggleRamCleanList,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(4.dp))
                 Text("Processes (${group.processes.size})", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 group.processes.take(8).forEach { p ->

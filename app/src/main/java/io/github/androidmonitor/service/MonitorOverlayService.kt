@@ -176,20 +176,32 @@ class MonitorOverlayService : Service() {
         val app = application as? MonitorApp ?: return
         pollJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
-                val monitorState = runCatching { app.systemSampler.sample() }.getOrNull()
-                val snapshot = monitorState?.snapshot
-                val procState = runCatching { app.processSampler.sample() }.getOrNull()
-                val groups = if (procState is ProcessListState.Ready) procState.groups else emptyList()
+                val needsMonitorLoop = app.settings.overlayEnabled.value || app.settings.notificationEnabled.value
+                if (needsMonitorLoop) {
+                    val monitorState = runCatching { app.systemSampler.sample() }.getOrNull()
+                    val snapshot = monitorState?.snapshot
+                    val procState = runCatching { app.processSampler.sample() }.getOrNull()
+                    val groups = if (procState is ProcessListState.Ready) procState.groups else emptyList()
 
-                scope.launch(Dispatchers.Main) {
-                    liveSnapshot = snapshot
-                    liveProcesses = groups
-                    if (app.settings.notificationEnabled.value) {
-                        updateNotification(snapshot, groups.firstOrNull())
+                    if (app.settings.anyAutoUtilityEnabled) {
+                        runCatching { app.utilityManager.tickIfDue(groups) }
                     }
-                }
 
-                delay(app.settings.refreshMs.value)
+                    scope.launch(Dispatchers.Main) {
+                        liveSnapshot = snapshot
+                        liveProcesses = groups
+                        if (app.settings.notificationEnabled.value) {
+                            updateNotification(snapshot, groups.firstOrNull())
+                        }
+                    }
+
+                    delay(app.settings.refreshMs.value)
+                } else {
+                    if (app.settings.anyAutoUtilityEnabled) {
+                        runCatching { app.utilityManager.tickIfDue(null) }
+                    }
+                    delay(10_000L)
+                }
             }
         }
     }
@@ -205,8 +217,10 @@ class MonitorOverlayService : Service() {
             }
         } else {
             removeOverlay()
-            if (!app.settings.notificationEnabled.value) {
+            if (!app.settings.notificationEnabled.value && !app.settings.anyAutoUtilityEnabled) {
                 stopSelf()
+            } else {
+                updateNotification(liveSnapshot, liveProcesses.firstOrNull())
             }
         }
     }
@@ -282,7 +296,11 @@ class MonitorOverlayService : Service() {
                         onClose = {
                             app.settings.setOverlayEnabled(false)
                             removeOverlay()
-                            if (!app.settings.notificationEnabled.value) stopSelf()
+                            if (!app.settings.notificationEnabled.value && !app.settings.anyAutoUtilityEnabled) {
+                                stopSelf()
+                            } else {
+                                updateNotification(liveSnapshot, liveProcesses.firstOrNull())
+                            }
                         },
                         onDrag = onDrag,
                     )
@@ -331,6 +349,7 @@ class MonitorOverlayService : Service() {
     }
 
     private fun buildNotification(snapshot: Snapshot?, topProcess: ProcessGroup?): Notification {
+        val app = application as? MonitorApp
         val openAppIntent = PendingIntent.getActivity(
             this,
             0,
@@ -344,6 +363,25 @@ class MonitorOverlayService : Service() {
             Intent(this, MonitorOverlayService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+
+        val utilitiesOnly = app != null && !app.settings.notificationEnabled.value && !app.settings.overlayEnabled.value && app.settings.anyAutoUtilityEnabled
+        if (utilitiesOnly) {
+            val activeParts = buildList {
+                if (app.settings.autoForceStopEnabled.value) add("Force Stop (${app.settings.autoForceStopApps.value.size})")
+                if (app.settings.autoThermalEnabled.value) add("Thermal (${app.settings.autoThermalApps.value.size})")
+                if (app.settings.autoRamCleanEnabled.value) add("RAM Clean (${app.settings.autoRamCleanApps.value.size})")
+            }
+            return NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("Background utilities active")
+                .setContentText(activeParts.joinToString(" • "))
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentIntent(openAppIntent)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .addAction(0, "Open Monitor", openAppIntent)
+                .addAction(0, "Stop", stopIntent)
+                .build()
+        }
 
         val cpuStr = snapshot?.cpu?.usage?.let(::formatPercent) ?: "—"
         val ramStr = snapshot?.memory?.let { "${formatBytes(it.usedBytes)} (${formatPercent(it.usedPercent)})" } ?: "—"

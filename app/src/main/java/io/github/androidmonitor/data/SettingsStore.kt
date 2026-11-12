@@ -62,6 +62,42 @@ class SettingsStore(context: Context) {
     private val _compactProcesses = MutableStateFlow(prefs.getBoolean(KEY_COMPACT_PROCESSES, false))
     val compactProcesses: StateFlow<Boolean> = _compactProcesses.asStateFlow()
 
+    private val _autoForceStopEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_FORCE_STOP_ENABLED, false))
+    val autoForceStopEnabled: StateFlow<Boolean> = _autoForceStopEnabled.asStateFlow()
+
+    private val _autoForceStopApps = MutableStateFlow(
+        prefs.getStringSet(KEY_AUTO_FORCE_STOP_APPS, emptySet())?.toSet() ?: emptySet()
+    )
+    val autoForceStopApps: StateFlow<Set<String>> = _autoForceStopApps.asStateFlow()
+
+    private val _autoForceStopTimeoutMin = MutableStateFlow(prefs.getInt(KEY_AUTO_FORCE_STOP_TIMEOUT_MIN, 15))
+    val autoForceStopTimeoutMin: StateFlow<Int> = _autoForceStopTimeoutMin.asStateFlow()
+
+    private val _autoThermalEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_THERMAL_ENABLED, false))
+    val autoThermalEnabled: StateFlow<Boolean> = _autoThermalEnabled.asStateFlow()
+
+    private val _autoThermalApps = MutableStateFlow(
+        prefs.getStringSet(KEY_AUTO_THERMAL_APPS, emptySet())?.toSet() ?: emptySet()
+    )
+    val autoThermalApps: StateFlow<Set<String>> = _autoThermalApps.asStateFlow()
+
+    private val _autoThermalTimeoutMin = MutableStateFlow(prefs.getInt(KEY_AUTO_THERMAL_TIMEOUT_MIN, 5))
+    val autoThermalTimeoutMin: StateFlow<Int> = _autoThermalTimeoutMin.asStateFlow()
+
+    private val _autoRamCleanEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_RAM_CLEAN_ENABLED, false))
+    val autoRamCleanEnabled: StateFlow<Boolean> = _autoRamCleanEnabled.asStateFlow()
+
+    private val _autoRamCleanApps = MutableStateFlow(
+        prefs.getStringSet(KEY_AUTO_RAM_CLEAN_APPS, emptySet())?.toSet() ?: emptySet()
+    )
+    val autoRamCleanApps: StateFlow<Set<String>> = _autoRamCleanApps.asStateFlow()
+
+    private val _autoRamCleanTimeoutMin = MutableStateFlow(prefs.getInt(KEY_AUTO_RAM_CLEAN_TIMEOUT_MIN, 10))
+    val autoRamCleanTimeoutMin: StateFlow<Int> = _autoRamCleanTimeoutMin.asStateFlow()
+
+    val anyAutoUtilityEnabled: Boolean
+        get() = _autoForceStopEnabled.value || _autoThermalEnabled.value || _autoRamCleanEnabled.value
+
     fun setCompactProcesses(enabled: Boolean) {
         prefs.edit { putBoolean(KEY_COMPACT_PROCESSES, enabled) }
         _compactProcesses.value = enabled
@@ -145,6 +181,60 @@ class SettingsStore(context: Context) {
         _notificationEnabled.value = enabled
     }
 
+    fun setAutoForceStopEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_AUTO_FORCE_STOP_ENABLED, enabled) }
+        _autoForceStopEnabled.value = enabled
+    }
+
+    fun toggleAutoForceStopApp(packageName: String) {
+        val current = _autoForceStopApps.value.toMutableSet()
+        if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+        val immutable = current.toSet()
+        prefs.edit { putStringSet(KEY_AUTO_FORCE_STOP_APPS, immutable) }
+        _autoForceStopApps.value = immutable
+    }
+
+    fun setAutoForceStopTimeoutMin(minutes: Int) {
+        prefs.edit { putInt(KEY_AUTO_FORCE_STOP_TIMEOUT_MIN, minutes) }
+        _autoForceStopTimeoutMin.value = minutes
+    }
+
+    fun setAutoThermalEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_AUTO_THERMAL_ENABLED, enabled) }
+        _autoThermalEnabled.value = enabled
+    }
+
+    fun toggleAutoThermalApp(packageName: String) {
+        val current = _autoThermalApps.value.toMutableSet()
+        if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+        val immutable = current.toSet()
+        prefs.edit { putStringSet(KEY_AUTO_THERMAL_APPS, immutable) }
+        _autoThermalApps.value = immutable
+    }
+
+    fun setAutoThermalTimeoutMin(minutes: Int) {
+        prefs.edit { putInt(KEY_AUTO_THERMAL_TIMEOUT_MIN, minutes) }
+        _autoThermalTimeoutMin.value = minutes
+    }
+
+    fun setAutoRamCleanEnabled(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_AUTO_RAM_CLEAN_ENABLED, enabled) }
+        _autoRamCleanEnabled.value = enabled
+    }
+
+    fun toggleAutoRamCleanApp(packageName: String) {
+        val current = _autoRamCleanApps.value.toMutableSet()
+        if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+        val immutable = current.toSet()
+        prefs.edit { putStringSet(KEY_AUTO_RAM_CLEAN_APPS, immutable) }
+        _autoRamCleanApps.value = immutable
+    }
+
+    fun setAutoRamCleanTimeoutMin(minutes: Int) {
+        prefs.edit { putInt(KEY_AUTO_RAM_CLEAN_TIMEOUT_MIN, minutes) }
+        _autoRamCleanTimeoutMin.value = minutes
+    }
+
     var preferredAccess: AccessMode
         get() = prefs.getString(KEY_ACCESS, null)
             ?.let { runCatching { AccessMode.valueOf(it) }.getOrNull() }
@@ -154,6 +244,7 @@ class SettingsStore(context: Context) {
     companion object {
         val REFRESH_OPTIONS = listOf(500L, 1_000L, 2_000L, 5_000L)
         val TOP_PROCESS_OPTIONS = listOf(5, 10, 15, 20)
+        val UTILITY_TIMEOUT_OPTIONS_MIN = listOf(1, 5, 10, 15, 30, 60, 120)
         private const val DEFAULT_REFRESH_MS = 1_000L
         private const val KEY_REFRESH_MS = "refresh_ms"
         private const val KEY_ACCESS = "access_mode"
@@ -169,5 +260,14 @@ class SettingsStore(context: Context) {
         private const val KEY_OVERLAY_OPACITY = "overlay_opacity"
         private const val KEY_NOTIFICATION_ENABLED = "notification_enabled"
         private const val KEY_COMPACT_PROCESSES = "compact_processes"
+        private const val KEY_AUTO_FORCE_STOP_ENABLED = "auto_force_stop_enabled"
+        private const val KEY_AUTO_FORCE_STOP_APPS = "auto_force_stop_apps"
+        private const val KEY_AUTO_FORCE_STOP_TIMEOUT_MIN = "auto_force_stop_timeout_min"
+        private const val KEY_AUTO_THERMAL_ENABLED = "auto_thermal_enabled"
+        private const val KEY_AUTO_THERMAL_APPS = "auto_thermal_apps"
+        private const val KEY_AUTO_THERMAL_TIMEOUT_MIN = "auto_thermal_timeout_min"
+        private const val KEY_AUTO_RAM_CLEAN_ENABLED = "auto_ram_clean_enabled"
+        private const val KEY_AUTO_RAM_CLEAN_APPS = "auto_ram_clean_apps"
+        private const val KEY_AUTO_RAM_CLEAN_TIMEOUT_MIN = "auto_ram_clean_timeout_min"
     }
 }

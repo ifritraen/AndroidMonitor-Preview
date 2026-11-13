@@ -141,6 +141,9 @@ data class ProcessGroup(
     val packageName: String?,
     val processes: List<ProcessInfo>,
     val isApp: Boolean,
+    val userId: Int = 0,
+    val isPrivateSpace: Boolean = false,
+    val profileName: String? = null,
     val isPinned: Boolean = false,
     val isLocked: Boolean = false,
 ) {

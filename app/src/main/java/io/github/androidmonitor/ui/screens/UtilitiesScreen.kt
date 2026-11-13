@@ -28,8 +28,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CleaningServices
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Thermostat
+import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,6 +68,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,10 +91,17 @@ private enum class UtilityPickerTarget(val title: String) {
     RAM_CLEAN("Auto RAM Clean"),
 }
 
+private data class AppTimerTarget(
+    val utility: UtilityPickerTarget,
+    val packageName: String,
+    val accentColor: Color,
+)
+
 @Composable
 fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
     val context = LocalContext.current
     val palette = LocalMetricPalette.current
+    val errorColor = MaterialTheme.colorScheme.error
     val access by vm.access.state.collectAsStateWithLifecycle()
     val utilityStatus by vm.utilityStatus.collectAsStateWithLifecycle()
     val installedApps by vm.installedApps.collectAsStateWithLifecycle()
@@ -98,16 +109,20 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
     val forceStopEnabled by vm.settings.autoForceStopEnabled.collectAsStateWithLifecycle()
     val forceStopApps by vm.settings.autoForceStopApps.collectAsStateWithLifecycle()
     val forceStopTimeoutMin by vm.settings.autoForceStopTimeoutMin.collectAsStateWithLifecycle()
+    val forceStopAppTimeouts by vm.settings.autoForceStopAppTimeouts.collectAsStateWithLifecycle()
 
     val thermalEnabled by vm.settings.autoThermalEnabled.collectAsStateWithLifecycle()
     val thermalApps by vm.settings.autoThermalApps.collectAsStateWithLifecycle()
     val thermalTimeoutMin by vm.settings.autoThermalTimeoutMin.collectAsStateWithLifecycle()
+    val thermalAppTimeouts by vm.settings.autoThermalAppTimeouts.collectAsStateWithLifecycle()
 
     val ramCleanEnabled by vm.settings.autoRamCleanEnabled.collectAsStateWithLifecycle()
     val ramCleanApps by vm.settings.autoRamCleanApps.collectAsStateWithLifecycle()
     val ramCleanTimeoutMin by vm.settings.autoRamCleanTimeoutMin.collectAsStateWithLifecycle()
+    val ramCleanAppTimeouts by vm.settings.autoRamCleanAppTimeouts.collectAsStateWithLifecycle()
 
     var pickerTarget by remember { mutableStateOf<UtilityPickerTarget?>(null) }
+    var appTimerTarget by remember { mutableStateOf<AppTimerTarget?>(null) }
 
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -143,7 +158,7 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
                 ScreenTitle("Utilities")
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Automate background app control after idle periods without activity. Add apps here or directly from the Processes tab.",
+                    "Automate background app control after idle periods without activity. Add apps here or directly from the Processes tab, and tap any app's timer pill to override the default timer.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -194,7 +209,7 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
                 title = "Background app force stop",
                 subtitle = "Force-stops selected apps after they stay in the background without activity for the configured duration.",
                 icon = Icons.Outlined.PowerSettingsNew,
-                accentColor = MaterialTheme.colorScheme.error,
+                accentColor = errorColor,
                 enabled = forceStopEnabled,
                 onToggleEnabled = { enabled ->
                     vm.settings.setAutoForceStopEnabled(enabled)
@@ -202,6 +217,10 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
                 },
                 timeoutMin = forceStopTimeoutMin,
                 onTimeoutSelected = { vm.settings.setAutoForceStopTimeoutMin(it) },
+                customTimeouts = forceStopAppTimeouts,
+                onPickAppTimer = { pkg ->
+                    appTimerTarget = AppTimerTarget(UtilityPickerTarget.FORCE_STOP, pkg, errorColor)
+                },
                 packages = forceStopApps,
                 apps = vm.apps,
                 status = utilityStatus,
@@ -235,6 +254,10 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
                 },
                 timeoutMin = thermalTimeoutMin,
                 onTimeoutSelected = { vm.settings.setAutoThermalTimeoutMin(it) },
+                customTimeouts = thermalAppTimeouts,
+                onPickAppTimer = { pkg ->
+                    appTimerTarget = AppTimerTarget(UtilityPickerTarget.THERMAL_REDUCE, pkg, palette.thermal)
+                },
                 packages = thermalApps,
                 apps = vm.apps,
                 status = utilityStatus,
@@ -268,6 +291,10 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
                 },
                 timeoutMin = ramCleanTimeoutMin,
                 onTimeoutSelected = { vm.settings.setAutoRamCleanTimeoutMin(it) },
+                customTimeouts = ramCleanAppTimeouts,
+                onPickAppTimer = { pkg ->
+                    appTimerTarget = AppTimerTarget(UtilityPickerTarget.RAM_CLEAN, pkg, palette.memory)
+                },
                 packages = ramCleanApps,
                 apps = vm.apps,
                 status = utilityStatus,
@@ -310,6 +337,31 @@ fun UtilitiesScreen(vm: MonitorViewModel, onOpenAccess: () -> Unit) {
             onDismiss = { pickerTarget = null },
         )
     }
+
+    val timerTarget = appTimerTarget
+    if (timerTarget != null) {
+        val (defaultMin, currentCustom) = when (timerTarget.utility) {
+            UtilityPickerTarget.FORCE_STOP -> forceStopTimeoutMin to forceStopAppTimeouts[timerTarget.packageName]
+            UtilityPickerTarget.THERMAL_REDUCE -> thermalTimeoutMin to thermalAppTimeouts[timerTarget.packageName]
+            UtilityPickerTarget.RAM_CLEAN -> ramCleanTimeoutMin to ramCleanAppTimeouts[timerTarget.packageName]
+        }
+        AppTimerPickerDialog(
+            appLabel = vm.apps.label(timerTarget.packageName) ?: timerTarget.packageName,
+            utilityTitle = timerTarget.utility.title,
+            defaultTimeoutMin = defaultMin,
+            currentCustomMin = currentCustom,
+            accentColor = timerTarget.accentColor,
+            onSelectMinutes = { mins ->
+                when (timerTarget.utility) {
+                    UtilityPickerTarget.FORCE_STOP -> vm.settings.setAutoForceStopAppTimeout(timerTarget.packageName, mins)
+                    UtilityPickerTarget.THERMAL_REDUCE -> vm.settings.setAutoThermalAppTimeout(timerTarget.packageName, mins)
+                    UtilityPickerTarget.RAM_CLEAN -> vm.settings.setAutoRamCleanAppTimeout(timerTarget.packageName, mins)
+                }
+                appTimerTarget = null
+            },
+            onDismiss = { appTimerTarget = null },
+        )
+    }
 }
 
 @Composable
@@ -322,6 +374,8 @@ private fun UtilitySectionCard(
     onToggleEnabled: (Boolean) -> Unit,
     timeoutMin: Int,
     onTimeoutSelected: (Int) -> Unit,
+    customTimeouts: Map<String, Int>,
+    onPickAppTimer: (String) -> Unit,
     packages: Set<String>,
     apps: AppInfoCache,
     status: UtilityStatusSnapshot,
@@ -370,7 +424,7 @@ private fun UtilitySectionCard(
                     Column {
                         Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "${packages.size} app${if (packages.size == 1) "" else "s"} · ${formatTimeout(timeoutMin)} idle",
+                            "${packages.size} app${if (packages.size == 1) "" else "s"} · default ${formatTimeout(timeoutMin)}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -388,10 +442,10 @@ private fun UtilitySectionCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            // Timeout selector
+            // Default timeout selector
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    "Idle background duration before trigger",
+                    "Default idle timer (for apps without a custom timer)",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -435,10 +489,12 @@ private fun UtilitySectionCard(
                     sortedPackages.forEach { pkg ->
                         WatchedAppRow(
                             packageName = pkg,
-                            timeoutMin = timeoutMin,
+                            defaultTimeoutMin = timeoutMin,
+                            customTimeoutMin = customTimeouts[pkg],
                             apps = apps,
                             status = status,
                             accentColor = accentColor,
+                            onPickTimer = { onPickAppTimer(pkg) },
                             onRemove = { onRemoveApp(pkg) },
                         )
                     }
@@ -477,15 +533,18 @@ private fun UtilitySectionCard(
 @Composable
 private fun WatchedAppRow(
     packageName: String,
-    timeoutMin: Int,
+    defaultTimeoutMin: Int,
+    customTimeoutMin: Int?,
     apps: AppInfoCache,
     status: UtilityStatusSnapshot,
     accentColor: Color,
+    onPickTimer: () -> Unit,
     onRemove: () -> Unit,
 ) {
     val label = remember(packageName) { apps.label(packageName) ?: packageName }
     val bitmap = remember(packageName) { apps.icon(packageName) }
 
+    val effectiveTimeoutMin = customTimeoutMin ?: defaultTimeoutMin
     val isRunning = status.runningPackages.contains(packageName)
     val isForeground = status.foregroundPackages.contains(packageName)
     val isThrottled = status.throttledPackages.contains(packageName)
@@ -496,7 +555,7 @@ private fun WatchedAppRow(
         isRunning && bgSince != null -> {
             val idleSec = ((SystemClock.elapsedRealtime() - bgSince) / 1000L).coerceAtLeast(0L)
             val idleMin = idleSec / 60L
-            val base = if (idleMin > 0) "Background ${idleMin}m / ${formatTimeout(timeoutMin)}" else "Background ${idleSec}s / ${formatTimeout(timeoutMin)}"
+            val base = if (idleMin > 0) "Background ${idleMin}m / ${formatTimeout(effectiveTimeoutMin)}" else "Background ${idleSec}s / ${formatTimeout(effectiveTimeoutMin)}"
             if (isThrottled) "$base · Throttled" else base
         }
         isRunning -> if (isThrottled) "Running · Throttled" else "Running"
@@ -508,6 +567,7 @@ private fun WatchedAppRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.65f))
+            .clickable(onClick = onPickTimer)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -541,6 +601,36 @@ private fun WatchedAppRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+        Spacer(Modifier.width(6.dp))
+        // Per-app timer pill
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = if (customTimeoutMin != null) accentColor.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHighest,
+            border = if (customTimeoutMin != null) BorderStroke(1.dp, accentColor.copy(alpha = 0.5f)) else null,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = onPickTimer),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Timer,
+                    contentDescription = "Set timer",
+                    tint = if (customTimeoutMin != null) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(12.dp),
+                )
+                Text(
+                    if (customTimeoutMin != null) formatTimeout(customTimeoutMin) else "Default",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    fontWeight = if (customTimeoutMin != null) FontWeight.Bold else FontWeight.Medium,
+                    color = if (customTimeoutMin != null) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(2.dp))
         IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
             Icon(
                 Icons.Outlined.Close,
@@ -550,6 +640,146 @@ private fun WatchedAppRow(
             )
         }
     }
+}
+
+@Composable
+private fun AppTimerPickerDialog(
+    appLabel: String,
+    utilityTitle: String,
+    defaultTimeoutMin: Int,
+    currentCustomMin: Int?,
+    accentColor: Color,
+    onSelectMinutes: (Int?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var customInput by remember(currentCustomMin) {
+        mutableStateOf(currentCustomMin?.toString() ?: "")
+    }
+    val customParsed = customInput.trim().toIntOrNull()?.takeIf { it in 1..1440 }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Timer · $appLabel", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    utilityTitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        text = {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val usingDefault = currentCustomMin == null
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (usingDefault) accentColor.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = if (usingDefault) BorderStroke(1.dp, accentColor.copy(alpha = 0.5f)) else null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onSelectMinutes(null) },
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            "Use default timer (${formatTimeout(defaultTimeoutMin)})",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = if (usingDefault) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (usingDefault) accentColor else MaterialTheme.colorScheme.onSurface,
+                        )
+                        if (usingDefault) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(accentColor))
+                        }
+                    }
+                }
+
+                Text(
+                    "Or pick a custom duration for this app:",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    SettingsStore.UTILITY_TIMEOUT_OPTIONS_MIN.forEach { mins ->
+                        val selected = currentCustomMin == mins
+                        val bg = if (selected) accentColor.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceContainerHigh
+                        val fg = if (selected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(bg)
+                                .clickable { onSelectMinutes(mins) }
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                formatTimeout(mins),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = fg,
+                            )
+                        }
+                    }
+                }
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                            if (customInput.isEmpty()) {
+                                Text(
+                                    "Custom minutes (1–1440)…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            BasicTextField(
+                                value = customInput,
+                                onValueChange = { next ->
+                                    if (next.length <= 4 && next.all { it.isDigit() }) {
+                                        customInput = next
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                                cursorBrush = SolidColor(accentColor),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    TextButton(
+                        onClick = { customParsed?.let(onSelectMinutes) },
+                        enabled = customParsed != null,
+                    ) {
+                        Text("Apply")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
 }
 
 @Composable

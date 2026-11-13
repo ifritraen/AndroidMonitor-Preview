@@ -30,10 +30,21 @@ class ProcessSampler(
 
     private data class CpuTicks(val startTime: Long, val ticks: Long)
     private data class NetCounters(val rx: Long, val tx: Long)
+    private data class UserProfileInfo(
+        val id: Int,
+        val name: String,
+        val isPrivateSpace: Boolean,
+    )
 
     private var previous: Map<Int, CpuTicks> = emptyMap()
     private var previousNet: Map<Int, NetCounters> = emptyMap()
     private var previousAt = 0L
+
+    @Volatile
+    private var userProfiles: Map<Int, UserProfileInfo> = emptyMap()
+    private var lastUsersRefreshAt = 0L
+    private val profilePackages = java.util.concurrent.ConcurrentHashMap<Int, Set<String>>()
+    private val profilePackagesRefreshedAt = java.util.concurrent.ConcurrentHashMap<Int, Long>()
 
     suspend fun sample(): ProcessListState {
         val shell = access.shell
@@ -151,6 +162,7 @@ class ProcessSampler(
         previousAt = now
 
         if (processes.isEmpty()) return ProcessListState.Error("The process list came back empty.")
+        refreshProfileMetadataIfNeeded(shell, processes, now)
         val groups = group(processes)
         syncLockedPriorities(groups)
         return ProcessListState.Ready(
@@ -158,6 +170,105 @@ class ProcessSampler(
             processCount = processes.size,
             threadCount = processes.sumOf { it.threads },
         )
+    }
+
+    private suspend fun refreshProfileMetadataIfNeeded(
+        shell: PrivilegedShell,
+        processes: List<ProcessInfo>,
+        now: Long,
+    ) {
+        val activeSecondaryUsers = processes.asSequence()
+            .filter { !it.isKernel }
+            .map { parseUserId(it.user) }
+            .filter { it > 0 }
+            .toSet()
+        if (activeSecondaryUsers.isEmpty()) return
+
+        val needsUserRefresh = activeSecondaryUsers.any { !userProfiles.containsKey(it) } ||
+            (now - lastUsersRefreshAt >= 20_000L)
+        if (needsUserRefresh) {
+            lastUsersRefreshAt = now
+            val out = shell.exec(
+                "dumpsys user 2>/dev/null | grep -E 'UserInfo\\{|Type:|Flags:'; " +
+                    "printf '\\n@@PMUSERS\\n'; pm list users 2>/dev/null"
+            )
+            if (!out.isNullOrBlank()) {
+                userProfiles = parseUserProfiles(out)
+            }
+        }
+
+        for (userId in activeSecondaryUsers) {
+            val lastRefreshed = profilePackagesRefreshedAt[userId] ?: 0L
+            if (!profilePackages.containsKey(userId) || now - lastRefreshed >= 30_000L) {
+                profilePackagesRefreshedAt[userId] = now
+                val out = shell.exec("pm list packages -f --user $userId 2>/dev/null")
+                if (!out.isNullOrBlank()) {
+                    val apkPaths = HashMap<String, String>()
+                    for (line in out.lineSequence()) {
+                        val trimmed = line.trim()
+                        if (!trimmed.startsWith("package:")) continue
+                        val body = trimmed.removePrefix("package:")
+                        val eqIdx = body.lastIndexOf('=')
+                        if (eqIdx <= 0) continue
+                        val path = body.substring(0, eqIdx)
+                        val pkg = body.substring(eqIdx + 1)
+                        if (PACKAGE_NAME.matches(pkg)) {
+                            apkPaths[pkg] = path
+                        }
+                    }
+                    if (apkPaths.isNotEmpty()) {
+                        apps.registerApkPaths(apkPaths)
+                        profilePackages[userId] = apkPaths.keys.toSet()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parseUserProfiles(text: String): Map<Int, UserProfileInfo> {
+        val map = HashMap<Int, UserProfileInfo>()
+        var currentId: Int? = null
+        var currentName = ""
+        var currentPrivate = false
+
+        fun commitCurrent() {
+            val id = currentId ?: return
+            val existing = map[id]
+            map[id] = UserProfileInfo(
+                id = id,
+                name = currentName.ifBlank { existing?.name ?: "User $id" },
+                isPrivateSpace = currentPrivate || (existing?.isPrivateSpace == true),
+            )
+        }
+
+        for (line in text.lineSequence()) {
+            val trimmed = line.trim()
+            if (trimmed == "@@PMUSERS") {
+                commitCurrent()
+                currentId = null
+                continue
+            }
+            val match = USER_INFO_REGEX.find(trimmed)
+            if (match != null) {
+                commitCurrent()
+                currentId = match.groupValues[1].toIntOrNull()
+                currentName = match.groupValues[2].trim()
+                currentPrivate = currentName.contains("private", ignoreCase = true)
+            } else if (currentId != null) {
+                if (trimmed.startsWith("Type:", ignoreCase = true) || trimmed.startsWith("Flags:", ignoreCase = true)) {
+                    if (trimmed.contains("PRIVATE", ignoreCase = true)) {
+                        currentPrivate = true
+                    }
+                }
+            }
+        }
+        commitCurrent()
+        return map
+    }
+
+    private fun parseUserId(user: String): Int {
+        if (!APP_USER.matches(user)) return 0
+        return user.substringAfter('u').substringBefore('_').toIntOrNull() ?: 0
     }
 
     private fun userToUid(user: String): Int? {
@@ -181,8 +292,9 @@ class ProcessSampler(
     suspend fun endTask(group: ProcessGroup): Boolean {
         val shell = access.shell ?: return false
         val packageName = group.packageName?.takeIf { PACKAGE_NAME.matches(it) }
+        val userFlag = if (group.userId > 0) "--user ${group.userId} " else ""
         return if (packageName != null) {
-            shell.exec("am force-stop $packageName; echo \"exit:\$?\"")?.contains("exit:0") == true
+            shell.exec("am force-stop ${userFlag}$packageName; echo \"exit:\$?\"")?.contains("exit:0") == true
         } else {
             val pids = group.processes.map { it.pid }.joinToString(" ")
             shell.exec("kill -15 $pids 2>/dev/null; echo \"exit:\$?\"")?.contains("exit:0") == true
@@ -193,9 +305,10 @@ class ProcessSampler(
     suspend fun forceStop(group: ProcessGroup): Boolean {
         val shell = access.shell ?: return false
         val packageName = group.packageName?.takeIf { PACKAGE_NAME.matches(it) }
+        val userFlag = if (group.userId > 0) "--user ${group.userId} " else ""
         val pids = group.processes.map { it.pid }.joinToString(" ")
         return if (packageName != null) {
-            shell.exec("am force-stop $packageName; kill -9 $pids 2>/dev/null; echo \"exit:\$?\"")?.contains("exit:0") == true
+            shell.exec("am force-stop ${userFlag}$packageName; kill -9 $pids 2>/dev/null; echo \"exit:\$?\"")?.contains("exit:0") == true
         } else {
             shell.exec("kill -9 $pids 2>/dev/null; echo \"exit:\$?\"")?.contains("exit:0") == true
         }
@@ -225,6 +338,7 @@ class ProcessSampler(
     suspend fun setProcessPriority(group: ProcessGroup, lock: Boolean): Boolean {
         val shell = access.shell ?: return false
         val pkg = group.packageName?.takeIf { PACKAGE_NAME.matches(it) }
+        val userFlag = if (group.userId > 0) "--user ${group.userId} " else ""
         val pids = group.processes.map { it.pid }
 
         val commands = mutableListOf<String>()
@@ -242,12 +356,12 @@ class ProcessSampler(
         if (pkg != null) {
             if (lock) {
                 commands.add("dumpsys deviceidle whitelist +$pkg 2>/dev/null")
-                commands.add("cmd appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null")
-                commands.add("cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null")
+                commands.add("cmd appops set ${userFlag}$pkg RUN_IN_BACKGROUND allow 2>/dev/null")
+                commands.add("cmd appops set ${userFlag}$pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null")
             } else {
                 commands.add("dumpsys deviceidle whitelist -$pkg 2>/dev/null")
-                commands.add("cmd appops set $pkg RUN_IN_BACKGROUND default 2>/dev/null")
-                commands.add("cmd appops set $pkg RUN_ANY_IN_BACKGROUND default 2>/dev/null")
+                commands.add("cmd appops set ${userFlag}$pkg RUN_IN_BACKGROUND default 2>/dev/null")
+                commands.add("cmd appops set ${userFlag}$pkg RUN_ANY_IN_BACKGROUND default 2>/dev/null")
             }
         }
 
@@ -306,25 +420,44 @@ class ProcessSampler(
         return if (total > 0) (total - free) * 1024L else null
     }
 
-    private fun group(processes: List<ProcessInfo>): List<ProcessGroup> =
-        processes.groupBy { proc -> packageOf(proc)?.let { "pkg:$it" } ?: "pid:${proc.pid}" }
-            .map { (key, procs) ->
-                val packageName = if (key.startsWith("pkg:")) key.removePrefix("pkg:") else null
-                ProcessGroup(
-                    key = key,
-                    label = packageName?.let(apps::label) ?: displayName(procs.first()),
-                    packageName = packageName,
-                    processes = procs.sortedByDescending { it.cpu },
-                    isApp = packageName != null && procs.any { APP_USER.matches(it.user) },
-                    isPinned = settings?.isProcessPinned(key) == true,
-                    isLocked = settings?.isProcessLocked(key) == true,
-                )
-            }
+    private fun group(processes: List<ProcessInfo>): List<ProcessGroup> {
+        data class GroupKey(val key: String, val userId: Int, val pkg: String?)
 
-    private fun packageOf(process: ProcessInfo): String? {
+        return processes.groupBy { proc ->
+            val userId = parseUserId(proc.user)
+            val pkg = packageOf(proc, userId)
+            val key = when {
+                pkg != null && userId > 0 -> "pkg:$userId:$pkg"
+                pkg != null -> "pkg:$pkg"
+                else -> "pid:${proc.pid}"
+            }
+            GroupKey(key, if (pkg != null) userId else 0, pkg)
+        }.map { (gk, procs) ->
+            val profile = if (gk.userId > 0) userProfiles[gk.userId] else null
+            val isPrivateSpace = gk.userId > 0 && (profile?.isPrivateSpace == true)
+            val profileName = if (gk.userId > 0) profile?.name ?: "User ${gk.userId}" else null
+            ProcessGroup(
+                key = gk.key,
+                label = gk.pkg?.let(apps::label) ?: displayName(procs.first()),
+                packageName = gk.pkg,
+                processes = procs.sortedByDescending { it.cpu },
+                isApp = gk.pkg != null && procs.any { APP_USER.matches(it.user) },
+                userId = gk.userId,
+                isPrivateSpace = isPrivateSpace,
+                profileName = profileName,
+                isPinned = settings?.isProcessPinned(gk.key) == true,
+                isLocked = settings?.isProcessLocked(gk.key) == true,
+            )
+        }
+    }
+
+    private fun packageOf(process: ProcessInfo, userId: Int): String? {
         if (process.isKernel) return null
         val candidate = process.name.substringBefore(':')
-        return candidate.takeIf { PACKAGE_NAME.matches(it) && apps.label(it) != null }
+        return candidate.takeIf {
+            PACKAGE_NAME.matches(it) &&
+                (apps.label(it) != null || (userId > 0 && profilePackages[userId]?.contains(it) == true))
+        }
     }
 
     private fun displayName(process: ProcessInfo): String =
@@ -420,5 +553,6 @@ class ProcessSampler(
         val WHITESPACE = Regex("\\s+")
         val PACKAGE_NAME = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")
         val APP_USER = Regex("u\\d+_[ai]\\d+")
+        val USER_INFO_REGEX = Regex("UserInfo\\{(\\d+):([^:}]+):[^}]*\\}")
     }
 }

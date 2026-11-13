@@ -95,13 +95,16 @@ class UtilityAutomationManager(
 
             // 1. Background app force stop
             if (settings.autoForceStopEnabled.value) {
-                val timeoutMs = settings.autoForceStopTimeoutMin.value * 60_000L
+                val defaultMin = settings.autoForceStopTimeoutMin.value
+                val customTimeouts = settings.autoForceStopAppTimeouts.value
                 for (pkg in settings.autoForceStopApps.value) {
                     if (pkg == selfPackage || !runningPkgs.contains(pkg) || foregroundPkgs.contains(pkg)) continue
                     val bgStart = backgroundSince[pkg] ?: continue
+                    val timeoutMs = (customTimeouts[pkg] ?: defaultMin) * 60_000L
                     val lastRun = lastForceStopRun[pkg] ?: 0L
                     if (now - bgStart >= timeoutMs && now - lastRun >= 60_000L) {
-                        if (executeForceStop(shell, pkg)) {
+                        val procs = procMap[pkg].orEmpty()
+                        if (executeForceStop(shell, pkg, procs)) {
                             lastForceStopRun[pkg] = now
                             backgroundSince.remove(pkg)
                             appendLog("Force stopped ${apps.label(pkg) ?: pkg}")
@@ -112,10 +115,12 @@ class UtilityAutomationManager(
 
             // 2. Auto thermal reduce (without force stop or killing)
             if (settings.autoThermalEnabled.value) {
-                val timeoutMs = settings.autoThermalTimeoutMin.value * 60_000L
+                val defaultMin = settings.autoThermalTimeoutMin.value
+                val customTimeouts = settings.autoThermalAppTimeouts.value
                 for (pkg in settings.autoThermalApps.value) {
                     if (pkg == selfPackage || !runningPkgs.contains(pkg) || foregroundPkgs.contains(pkg)) continue
                     val bgStart = backgroundSince[pkg] ?: continue
+                    val timeoutMs = (customTimeouts[pkg] ?: defaultMin) * 60_000L
                     val lastRun = lastThermalRun[pkg] ?: 0L
                     if (now - bgStart >= timeoutMs && now - lastRun >= timeoutMs) {
                         val procs = procMap[pkg].orEmpty()
@@ -130,10 +135,12 @@ class UtilityAutomationManager(
 
             // 3. Auto RAM clean (release resources without force stop or killing)
             if (settings.autoRamCleanEnabled.value) {
-                val timeoutMs = settings.autoRamCleanTimeoutMin.value * 60_000L
+                val defaultMin = settings.autoRamCleanTimeoutMin.value
+                val customTimeouts = settings.autoRamCleanAppTimeouts.value
                 for (pkg in settings.autoRamCleanApps.value) {
                     if (pkg == selfPackage || !runningPkgs.contains(pkg) || foregroundPkgs.contains(pkg)) continue
                     val bgStart = backgroundSince[pkg] ?: continue
+                    val timeoutMs = (customTimeouts[pkg] ?: defaultMin) * 60_000L
                     val lastRun = lastRamCleanRun[pkg] ?: 0L
                     if (now - bgStart >= timeoutMs && now - lastRun >= timeoutMs) {
                         val procs = procMap[pkg].orEmpty()
@@ -164,7 +171,7 @@ class UtilityAutomationManager(
             var count = 0
             for (pkg in settings.autoForceStopApps.value) {
                 if (pkg == selfPackage || !procMap.containsKey(pkg) || foregroundPkgs.contains(pkg)) continue
-                if (executeForceStop(shell, pkg)) {
+                if (executeForceStop(shell, pkg, procMap[pkg].orEmpty())) {
                     lastForceStopRun[pkg] = SystemClock.elapsedRealtime()
                     backgroundSince.remove(pkg)
                     count++
@@ -234,27 +241,36 @@ class UtilityAutomationManager(
             .toSet()
     }
 
+    private data class RunningProc(val pid: Int, val userId: Int, val name: String)
+
     private suspend fun resolveRunningPackages(
         shell: io.github.androidmonitor.privileged.PrivilegedShell,
         groups: List<ProcessGroup>?,
-    ): Map<String, List<Pair<Int, String>>> {
+    ): Map<String, List<RunningProc>> {
         if (groups != null) {
-            val map = HashMap<String, List<Pair<Int, String>>>()
+            val map = HashMap<String, MutableList<RunningProc>>()
             for (g in groups) {
                 val pkg = g.packageName ?: continue
-                map[pkg] = g.processes.map { it.pid to it.name }
+                val list = map.getOrPut(pkg) { mutableListOf() }
+                g.processes.forEach { list.add(RunningProc(it.pid, g.userId, it.name)) }
             }
             return map
         }
-        val psOut = shell.exec("ps -A -o PID,NAME 2>/dev/null") ?: return emptyMap()
-        val map = HashMap<String, MutableList<Pair<Int, String>>>()
+        val psOut = shell.exec("ps -A -o PID,USER,NAME 2>/dev/null") ?: return emptyMap()
+        val map = HashMap<String, MutableList<RunningProc>>()
         for (line in psOut.lineSequence()) {
-            val parts = line.trim().split(WHITESPACE, limit = 2)
+            val parts = line.trim().split(WHITESPACE, limit = 3)
             val pid = parts.firstOrNull()?.toIntOrNull() ?: continue
-            val name = parts.getOrNull(1)?.trim() ?: continue
+            val userStr = parts.getOrNull(1)?.trim() ?: continue
+            val name = parts.getOrNull(2)?.trim() ?: continue
             val pkg = name.substringBefore(':')
+            val userId = if (userStr.startsWith("u") && '_' in userStr) {
+                userStr.substringAfter('u').substringBefore('_').toIntOrNull() ?: 0
+            } else {
+                0
+            }
             if (PACKAGE_NAME.matches(pkg)) {
-                map.getOrPut(pkg) { mutableListOf() }.add(pid to name)
+                map.getOrPut(pkg) { mutableListOf() }.add(RunningProc(pid, userId, name))
             }
         }
         return map
@@ -263,24 +279,33 @@ class UtilityAutomationManager(
     private suspend fun executeForceStop(
         shell: io.github.androidmonitor.privileged.PrivilegedShell,
         pkg: String,
+        procs: List<RunningProc>,
     ): Boolean {
         if (!PACKAGE_NAME.matches(pkg)) return false
-        return shell.exec("am force-stop $pkg 2>/dev/null; echo \"exit:\$?\"")?.contains("exit:0") == true
+        val userIds = procs.map { it.userId }.distinct().ifEmpty { listOf(0) }
+        val cmds = userIds.map { uid ->
+            val userFlag = if (uid > 0) "--user $uid " else ""
+            "am force-stop ${userFlag}$pkg 2>/dev/null"
+        }
+        return shell.exec(cmds.joinToString("; ") + "; echo \"exit:\$?\"")?.contains("exit:0") == true
     }
 
     private suspend fun executeThermalReduce(
         shell: io.github.androidmonitor.privileged.PrivilegedShell,
         pkg: String,
-        procs: List<Pair<Int, String>>,
+        procs: List<RunningProc>,
     ): Boolean {
         if (!PACKAGE_NAME.matches(pkg)) return false
-        val cmds = mutableListOf(
-            "(am set-standby-bucket $pkg restricted 2>/dev/null || am set-standby-bucket $pkg rare 2>/dev/null)",
-            "am set-inactive $pkg true 2>/dev/null",
-            "cmd appops set $pkg RUN_ANY_IN_BACKGROUND ignore 2>/dev/null",
-        )
-        for ((pid, _) in procs) {
-            cmds.add("renice -n 19 -p $pid 2>/dev/null")
+        val userIds = procs.map { it.userId }.distinct().ifEmpty { listOf(0) }
+        val cmds = mutableListOf<String>()
+        for (uid in userIds) {
+            val userFlag = if (uid > 0) "--user $uid " else ""
+            cmds.add("(am set-standby-bucket ${userFlag}$pkg restricted 2>/dev/null || am set-standby-bucket ${userFlag}$pkg rare 2>/dev/null)")
+            cmds.add("am set-inactive ${userFlag}$pkg true 2>/dev/null")
+            cmds.add("cmd appops set ${userFlag}$pkg RUN_ANY_IN_BACKGROUND ignore 2>/dev/null")
+        }
+        for (proc in procs) {
+            cmds.add("renice -n 19 -p ${proc.pid} 2>/dev/null")
         }
         shell.exec(cmds.joinToString("; "))
         return true
@@ -289,16 +314,19 @@ class UtilityAutomationManager(
     private suspend fun restoreThermalState(
         shell: io.github.androidmonitor.privileged.PrivilegedShell,
         pkg: String,
-        procs: List<Pair<Int, String>>,
+        procs: List<RunningProc>,
     ) {
         if (!PACKAGE_NAME.matches(pkg)) return
-        val cmds = mutableListOf(
-            "am set-standby-bucket $pkg active 2>/dev/null",
-            "am set-inactive $pkg false 2>/dev/null",
-            "cmd appops set $pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null",
-        )
-        for ((pid, _) in procs) {
-            cmds.add("renice -n 0 -p $pid 2>/dev/null")
+        val userIds = procs.map { it.userId }.distinct().ifEmpty { listOf(0) }
+        val cmds = mutableListOf<String>()
+        for (uid in userIds) {
+            val userFlag = if (uid > 0) "--user $uid " else ""
+            cmds.add("am set-standby-bucket ${userFlag}$pkg active 2>/dev/null")
+            cmds.add("am set-inactive ${userFlag}$pkg false 2>/dev/null")
+            cmds.add("cmd appops set ${userFlag}$pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null")
+        }
+        for (proc in procs) {
+            cmds.add("renice -n 0 -p ${proc.pid} 2>/dev/null")
         }
         shell.exec(cmds.joinToString("; "))
     }
@@ -306,18 +334,19 @@ class UtilityAutomationManager(
     private suspend fun executeRamClean(
         shell: io.github.androidmonitor.privileged.PrivilegedShell,
         pkg: String,
-        procs: List<Pair<Int, String>>,
+        procs: List<RunningProc>,
     ): Boolean {
         if (!PACKAGE_NAME.matches(pkg)) return false
         val cmds = mutableListOf<String>()
-        val procNames = procs.map { it.second }.distinct().ifEmpty { listOf(pkg) }
-        for (procName in procNames) {
-            if (PROCESS_NAME.matches(procName)) {
-                cmds.add("am send-trim-memory $procName COMPLETE 2>/dev/null")
+        val procEntries = procs.distinctBy { it.userId to it.name }.ifEmpty { listOf(RunningProc(0, 0, pkg)) }
+        for (entry in procEntries) {
+            if (PROCESS_NAME.matches(entry.name)) {
+                val userFlag = if (entry.userId > 0) "--user ${entry.userId} " else ""
+                cmds.add("am send-trim-memory ${userFlag}${entry.name} COMPLETE 2>/dev/null")
             }
         }
-        for ((pid, _) in procs) {
-            cmds.add("[ -w /proc/$pid/reclaim ] && echo file > /proc/$pid/reclaim 2>/dev/null")
+        for (proc in procs) {
+            cmds.add("[ -w /proc/${proc.pid}/reclaim ] && echo file > /proc/${proc.pid}/reclaim 2>/dev/null")
         }
         cmds.add("[ -w /sys/block/zram0/compact ] && echo 1 > /sys/block/zram0/compact 2>/dev/null")
         shell.exec(cmds.joinToString("; "))

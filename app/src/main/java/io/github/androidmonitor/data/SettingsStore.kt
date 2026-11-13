@@ -73,6 +73,9 @@ class SettingsStore(context: Context) {
     private val _autoForceStopTimeoutMin = MutableStateFlow(prefs.getInt(KEY_AUTO_FORCE_STOP_TIMEOUT_MIN, 15))
     val autoForceStopTimeoutMin: StateFlow<Int> = _autoForceStopTimeoutMin.asStateFlow()
 
+    private val _autoForceStopAppTimeouts = MutableStateFlow(readTimeoutMap(KEY_AUTO_FORCE_STOP_APP_TIMEOUTS))
+    val autoForceStopAppTimeouts: StateFlow<Map<String, Int>> = _autoForceStopAppTimeouts.asStateFlow()
+
     private val _autoThermalEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_THERMAL_ENABLED, false))
     val autoThermalEnabled: StateFlow<Boolean> = _autoThermalEnabled.asStateFlow()
 
@@ -84,6 +87,9 @@ class SettingsStore(context: Context) {
     private val _autoThermalTimeoutMin = MutableStateFlow(prefs.getInt(KEY_AUTO_THERMAL_TIMEOUT_MIN, 5))
     val autoThermalTimeoutMin: StateFlow<Int> = _autoThermalTimeoutMin.asStateFlow()
 
+    private val _autoThermalAppTimeouts = MutableStateFlow(readTimeoutMap(KEY_AUTO_THERMAL_APP_TIMEOUTS))
+    val autoThermalAppTimeouts: StateFlow<Map<String, Int>> = _autoThermalAppTimeouts.asStateFlow()
+
     private val _autoRamCleanEnabled = MutableStateFlow(prefs.getBoolean(KEY_AUTO_RAM_CLEAN_ENABLED, false))
     val autoRamCleanEnabled: StateFlow<Boolean> = _autoRamCleanEnabled.asStateFlow()
 
@@ -94,6 +100,9 @@ class SettingsStore(context: Context) {
 
     private val _autoRamCleanTimeoutMin = MutableStateFlow(prefs.getInt(KEY_AUTO_RAM_CLEAN_TIMEOUT_MIN, 10))
     val autoRamCleanTimeoutMin: StateFlow<Int> = _autoRamCleanTimeoutMin.asStateFlow()
+
+    private val _autoRamCleanAppTimeouts = MutableStateFlow(readTimeoutMap(KEY_AUTO_RAM_CLEAN_APP_TIMEOUTS))
+    val autoRamCleanAppTimeouts: StateFlow<Map<String, Int>> = _autoRamCleanAppTimeouts.asStateFlow()
 
     val anyAutoUtilityEnabled: Boolean
         get() = _autoForceStopEnabled.value || _autoThermalEnabled.value || _autoRamCleanEnabled.value
@@ -188,15 +197,27 @@ class SettingsStore(context: Context) {
 
     fun toggleAutoForceStopApp(packageName: String) {
         val current = _autoForceStopApps.value.toMutableSet()
-        if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+        val removed = current.remove(packageName)
+        if (!removed) current.add(packageName)
         val immutable = current.toSet()
         prefs.edit { putStringSet(KEY_AUTO_FORCE_STOP_APPS, immutable) }
         _autoForceStopApps.value = immutable
+        if (removed && _autoForceStopAppTimeouts.value.containsKey(packageName)) {
+            setAutoForceStopAppTimeout(packageName, null)
+        }
     }
 
     fun setAutoForceStopTimeoutMin(minutes: Int) {
         prefs.edit { putInt(KEY_AUTO_FORCE_STOP_TIMEOUT_MIN, minutes) }
         _autoForceStopTimeoutMin.value = minutes
+    }
+
+    fun setAutoForceStopAppTimeout(packageName: String, minutes: Int?) {
+        val updated = _autoForceStopAppTimeouts.value.toMutableMap()
+        if (minutes == null || minutes <= 0) updated.remove(packageName) else updated[packageName] = minutes
+        val immutable = updated.toMap()
+        writeTimeoutMap(KEY_AUTO_FORCE_STOP_APP_TIMEOUTS, immutable)
+        _autoForceStopAppTimeouts.value = immutable
     }
 
     fun setAutoThermalEnabled(enabled: Boolean) {
@@ -206,15 +227,27 @@ class SettingsStore(context: Context) {
 
     fun toggleAutoThermalApp(packageName: String) {
         val current = _autoThermalApps.value.toMutableSet()
-        if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+        val removed = current.remove(packageName)
+        if (!removed) current.add(packageName)
         val immutable = current.toSet()
         prefs.edit { putStringSet(KEY_AUTO_THERMAL_APPS, immutable) }
         _autoThermalApps.value = immutable
+        if (removed && _autoThermalAppTimeouts.value.containsKey(packageName)) {
+            setAutoThermalAppTimeout(packageName, null)
+        }
     }
 
     fun setAutoThermalTimeoutMin(minutes: Int) {
         prefs.edit { putInt(KEY_AUTO_THERMAL_TIMEOUT_MIN, minutes) }
         _autoThermalTimeoutMin.value = minutes
+    }
+
+    fun setAutoThermalAppTimeout(packageName: String, minutes: Int?) {
+        val updated = _autoThermalAppTimeouts.value.toMutableMap()
+        if (minutes == null || minutes <= 0) updated.remove(packageName) else updated[packageName] = minutes
+        val immutable = updated.toMap()
+        writeTimeoutMap(KEY_AUTO_THERMAL_APP_TIMEOUTS, immutable)
+        _autoThermalAppTimeouts.value = immutable
     }
 
     fun setAutoRamCleanEnabled(enabled: Boolean) {
@@ -224,15 +257,50 @@ class SettingsStore(context: Context) {
 
     fun toggleAutoRamCleanApp(packageName: String) {
         val current = _autoRamCleanApps.value.toMutableSet()
-        if (current.contains(packageName)) current.remove(packageName) else current.add(packageName)
+        val removed = current.remove(packageName)
+        if (!removed) current.add(packageName)
         val immutable = current.toSet()
         prefs.edit { putStringSet(KEY_AUTO_RAM_CLEAN_APPS, immutable) }
         _autoRamCleanApps.value = immutable
+        if (removed && _autoRamCleanAppTimeouts.value.containsKey(packageName)) {
+            setAutoRamCleanAppTimeout(packageName, null)
+        }
     }
 
     fun setAutoRamCleanTimeoutMin(minutes: Int) {
         prefs.edit { putInt(KEY_AUTO_RAM_CLEAN_TIMEOUT_MIN, minutes) }
         _autoRamCleanTimeoutMin.value = minutes
+    }
+
+    fun setAutoRamCleanAppTimeout(packageName: String, minutes: Int?) {
+        val updated = _autoRamCleanAppTimeouts.value.toMutableMap()
+        if (minutes == null || minutes <= 0) updated.remove(packageName) else updated[packageName] = minutes
+        val immutable = updated.toMap()
+        writeTimeoutMap(KEY_AUTO_RAM_CLEAN_APP_TIMEOUTS, immutable)
+        _autoRamCleanAppTimeouts.value = immutable
+    }
+
+    private fun readTimeoutMap(key: String): Map<String, Int> {
+        val raw = prefs.getString(key, null) ?: return emptyMap()
+        return runCatching {
+            val json = org.json.JSONObject(raw)
+            val map = LinkedHashMap<String, Int>()
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val v = json.optInt(k, -1)
+                if (v > 0) map[k] = v
+            }
+            map.toMap()
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun writeTimeoutMap(key: String, map: Map<String, Int>) {
+        val json = org.json.JSONObject()
+        for ((k, v) in map) {
+            if (v > 0) json.put(k, v)
+        }
+        prefs.edit { putString(key, json.toString()) }
     }
 
     var preferredAccess: AccessMode
@@ -263,11 +331,14 @@ class SettingsStore(context: Context) {
         private const val KEY_AUTO_FORCE_STOP_ENABLED = "auto_force_stop_enabled"
         private const val KEY_AUTO_FORCE_STOP_APPS = "auto_force_stop_apps"
         private const val KEY_AUTO_FORCE_STOP_TIMEOUT_MIN = "auto_force_stop_timeout_min"
+        private const val KEY_AUTO_FORCE_STOP_APP_TIMEOUTS = "auto_force_stop_app_timeouts"
         private const val KEY_AUTO_THERMAL_ENABLED = "auto_thermal_enabled"
         private const val KEY_AUTO_THERMAL_APPS = "auto_thermal_apps"
         private const val KEY_AUTO_THERMAL_TIMEOUT_MIN = "auto_thermal_timeout_min"
+        private const val KEY_AUTO_THERMAL_APP_TIMEOUTS = "auto_thermal_app_timeouts"
         private const val KEY_AUTO_RAM_CLEAN_ENABLED = "auto_ram_clean_enabled"
         private const val KEY_AUTO_RAM_CLEAN_APPS = "auto_ram_clean_apps"
         private const val KEY_AUTO_RAM_CLEAN_TIMEOUT_MIN = "auto_ram_clean_timeout_min"
+        private const val KEY_AUTO_RAM_CLEAN_APP_TIMEOUTS = "auto_ram_clean_app_timeouts"
     }
 }

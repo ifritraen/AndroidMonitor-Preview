@@ -39,6 +39,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.PushPin
@@ -57,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -74,6 +77,7 @@ import io.github.androidmonitor.data.MonitorState
 import io.github.androidmonitor.data.OverlayType
 import io.github.androidmonitor.data.ProcessGroup
 import io.github.androidmonitor.data.ProcessGrouping
+import io.github.androidmonitor.data.ProcessInfo
 import io.github.androidmonitor.data.ProcessListState
 import io.github.androidmonitor.service.MonitorOverlayService
 import io.github.androidmonitor.ui.MonitorViewModel
@@ -113,7 +117,7 @@ private fun CompactChip(
     }
 }
 
-private fun getNameColumnWidth(isCompact: Boolean) = if (isCompact) 125.dp else 190.dp
+private fun getNameColumnWidth(isCompact: Boolean) = if (isCompact) 136.dp else 196.dp
 private fun getCpuColumnWidth(isCompact: Boolean) = if (isCompact) 48.dp else 72.dp
 private fun getMemoryColumnWidth(isCompact: Boolean) = if (isCompact) 68.dp else 96.dp
 private fun getGpuColumnWidth(isCompact: Boolean) = if (isCompact) 44.dp else 64.dp
@@ -224,6 +228,12 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     var memorySortMode by rememberSaveable { mutableStateOf(MemorySortMode.RAM_DESC) }
     var showKernel by rememberSaveable { mutableStateOf(false) }
     var selectedKey by remember { mutableStateOf<String?>(null) }
+    var expandedKeys by rememberSaveable(
+        stateSaver = listSaver(
+            save = { it.toList() },
+            restore = { it.toSet() },
+        ),
+    ) { mutableStateOf(emptySet<String>()) }
     val totalMemory = monitor?.snapshot?.memory?.totalBytes ?: 0L
     val pinnedKeys by vm.settings.pinnedProcesses.collectAsStateWithLifecycle()
     val lockedKeys by vm.settings.lockedProcesses.collectAsStateWithLifecycle()
@@ -412,45 +422,55 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
     )
     HorizontalDivider()
 
+    val toggleExpand: (ProcessGroup) -> Unit = { group ->
+        expandedKeys = if (expandedKeys.contains(group.key)) {
+            expandedKeys - group.key
+        } else {
+            expandedKeys + group.key
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 72.dp),
     ) {
         if (grouping == ProcessGrouping.MIXED) {
-            items(visible, key = { it.key }) { group ->
-                ProcessRow(
-                    group = group,
-                    totalMemory = totalMemory,
-                    apps = vm.apps,
-                    horizontalScrollState = horizontalScrollState,
-                    isCompact = isCompact,
-                    onClick = { selectedKey = it.key },
-                    onTogglePin = {
-                        vm.togglePin(group)
-                        val isPinnedNow = !pinnedKeys.contains(group.key)
-                        Toast.makeText(context, if (isPinnedNow) "Pinned ${group.label}" else "Unpinned ${group.label}", Toast.LENGTH_SHORT).show()
-                    },
-                    onEndTask = {
-                        vm.endTask(group) { ok ->
-                            Toast.makeText(context, if (ok) "Ended ${group.label}" else "Couldn't end ${group.label}", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onForceStop = {
-                        vm.forceStop(group) { ok ->
-                            Toast.makeText(context, if (ok) "Force stopped ${group.label}" else "Couldn't force stop ${group.label}", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                )
-            }
-        } else {
-            groupSection(
-                title = "Apps",
-                groups = apps,
+            groupItems(
+                groups = visible,
+                expandedKeys = expandedKeys,
                 totalMemory = totalMemory,
                 apps = vm.apps,
                 horizontalScrollState = horizontalScrollState,
                 isCompact = isCompact,
                 onClick = { selectedKey = it.key },
+                onToggleExpand = toggleExpand,
+                onTogglePin = {
+                    vm.togglePin(it)
+                    val isPinnedNow = !pinnedKeys.contains(it.key)
+                    Toast.makeText(context, if (isPinnedNow) "Pinned ${it.label}" else "Unpinned ${it.label}", Toast.LENGTH_SHORT).show()
+                },
+                onEndTask = { g ->
+                    vm.endTask(g) { ok ->
+                        Toast.makeText(context, if (ok) "Ended ${g.label}" else "Couldn't end ${g.label}", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onForceStop = { g ->
+                    vm.forceStop(g) { ok ->
+                        Toast.makeText(context, if (ok) "Force stopped ${g.label}" else "Couldn't force stop ${g.label}", Toast.LENGTH_SHORT).show()
+                    }
+                },
+            )
+        } else {
+            groupSection(
+                title = "Apps",
+                groups = apps,
+                expandedKeys = expandedKeys,
+                totalMemory = totalMemory,
+                apps = vm.apps,
+                horizontalScrollState = horizontalScrollState,
+                isCompact = isCompact,
+                onClick = { selectedKey = it.key },
+                onToggleExpand = toggleExpand,
                 onTogglePin = {
                     vm.togglePin(it)
                     val isPinnedNow = !pinnedKeys.contains(it.key)
@@ -470,11 +490,13 @@ private fun ProcessTable(state: ProcessListState.Ready, vm: MonitorViewModel, mo
             groupSection(
                 title = "System processes",
                 groups = system,
+                expandedKeys = expandedKeys,
                 totalMemory = totalMemory,
                 apps = vm.apps,
                 horizontalScrollState = horizontalScrollState,
                 isCompact = isCompact,
                 onClick = { selectedKey = it.key },
+                onToggleExpand = toggleExpand,
                 onTogglePin = {
                     vm.togglePin(it)
                     val isPinnedNow = !pinnedKeys.contains(it.key)
@@ -756,14 +778,19 @@ private fun HeaderCell(
     }
 }
 
+private val PrivateSpaceDotColor = Color(0xFFEF4444)
+private val SecondaryProfileDotColor = Color(0xFF38BDF8)
+
 private fun LazyListScope.groupSection(
     title: String,
     groups: List<ProcessGroup>,
+    expandedKeys: Set<String>,
     totalMemory: Long,
     apps: AppInfoCache,
     horizontalScrollState: ScrollState,
     isCompact: Boolean,
     onClick: (ProcessGroup) -> Unit,
+    onToggleExpand: (ProcessGroup) -> Unit,
     onTogglePin: (ProcessGroup) -> Unit,
     onEndTask: (ProcessGroup) -> Unit,
     onForceStop: (ProcessGroup) -> Unit,
@@ -777,18 +804,63 @@ private fun LazyListScope.groupSection(
             modifier = Modifier.padding(start = if (isCompact) 8.dp else 24.dp, top = if (isCompact) 4.dp else 16.dp, bottom = if (isCompact) 1.dp else 6.dp),
         )
     }
-    items(groups, key = { it.key }) { group ->
-        ProcessRow(
-            group = group,
-            totalMemory = totalMemory,
-            apps = apps,
-            horizontalScrollState = horizontalScrollState,
-            isCompact = isCompact,
-            onClick = onClick,
-            onTogglePin = onTogglePin,
-            onEndTask = onEndTask,
-            onForceStop = onForceStop,
-        )
+    groupItems(
+        groups = groups,
+        expandedKeys = expandedKeys,
+        totalMemory = totalMemory,
+        apps = apps,
+        horizontalScrollState = horizontalScrollState,
+        isCompact = isCompact,
+        onClick = onClick,
+        onToggleExpand = onToggleExpand,
+        onTogglePin = onTogglePin,
+        onEndTask = onEndTask,
+        onForceStop = onForceStop,
+    )
+}
+
+private fun LazyListScope.groupItems(
+    groups: List<ProcessGroup>,
+    expandedKeys: Set<String>,
+    totalMemory: Long,
+    apps: AppInfoCache,
+    horizontalScrollState: ScrollState,
+    isCompact: Boolean,
+    onClick: (ProcessGroup) -> Unit,
+    onToggleExpand: (ProcessGroup) -> Unit,
+    onTogglePin: (ProcessGroup) -> Unit,
+    onEndTask: (ProcessGroup) -> Unit,
+    onForceStop: (ProcessGroup) -> Unit,
+) {
+    groups.forEach { group ->
+        val isExpanded = group.processes.size > 1 && expandedKeys.contains(group.key)
+        item(key = group.key) {
+            ProcessRow(
+                group = group,
+                expanded = isExpanded,
+                totalMemory = totalMemory,
+                apps = apps,
+                horizontalScrollState = horizontalScrollState,
+                isCompact = isCompact,
+                onClick = onClick,
+                onToggleExpand = { onToggleExpand(group) },
+                onTogglePin = onTogglePin,
+                onEndTask = onEndTask,
+                onForceStop = onForceStop,
+            )
+        }
+        if (isExpanded) {
+            items(group.processes, key = { "sub:${group.key}:${it.pid}" }) { proc ->
+                SubprocessRow(
+                    group = group,
+                    process = proc,
+                    totalMemory = totalMemory,
+                    horizontalScrollState = horizontalScrollState,
+                    isCompact = isCompact,
+                    onClick = { onClick(group) },
+                )
+            }
+        }
     }
 }
 
@@ -796,20 +868,27 @@ private fun LazyListScope.groupSection(
 @Composable
 private fun ProcessRow(
     group: ProcessGroup,
+    expanded: Boolean,
     totalMemory: Long,
     apps: AppInfoCache,
     horizontalScrollState: ScrollState,
     isCompact: Boolean,
     onClick: (ProcessGroup) -> Unit,
+    onToggleExpand: () -> Unit,
     onTogglePin: (ProcessGroup) -> Unit,
     onEndTask: (ProcessGroup) -> Unit,
     onForceStop: (ProcessGroup) -> Unit,
 ) {
     val heat = LocalMetricPalette.current.heat
+    val profilePrefix = when {
+        group.isPrivateSpace -> "Private · "
+        group.userId > 0 -> "${group.profileName ?: "User ${group.userId}"} · "
+        else -> ""
+    }
     val subtitle = if (group.processes.size > 1) {
-        "${group.packageName ?: group.processes.first().name} · ${group.processes.size} processes"
+        "$profilePrefix${group.packageName ?: group.processes.first().name} · ${group.processes.size} processes"
     } else {
-        "${group.processes.first().name} · PID ${group.processes.first().pid}"
+        "$profilePrefix${group.processes.first().name} · PID ${group.processes.first().pid}"
     }
 
     val context = LocalContext.current
@@ -826,7 +905,7 @@ private fun ProcessRow(
             .padding(start = if (isCompact) 4.dp else 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Name Column: Fixed on left with Close button + Icon + Pin + Title
+        // Name Column: Fixed on left with Close button + Icon + Pin + Title + Expand Arrow
         Row(
             Modifier.width(getNameColumnWidth(isCompact)).padding(vertical = if (isCompact) 1.dp else 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -906,12 +985,31 @@ private fun ProcessRow(
             Spacer(Modifier.width(if (isCompact) 3.dp else 8.dp))
 
             Column(Modifier.weight(1f)) {
-                Text(
-                    group.label,
-                    style = if (isCompact) MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp) else MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (group.isPrivateSpace) {
+                        Box(
+                            Modifier
+                                .size(if (isCompact) 6.dp else 8.dp)
+                                .clip(CircleShape)
+                                .background(PrivateSpaceDotColor),
+                        )
+                        Spacer(Modifier.width(if (isCompact) 3.dp else 5.dp))
+                    } else if (group.userId > 0) {
+                        Box(
+                            Modifier
+                                .size(if (isCompact) 6.dp else 8.dp)
+                                .clip(CircleShape)
+                                .background(SecondaryProfileDotColor),
+                        )
+                        Spacer(Modifier.width(if (isCompact) 3.dp else 5.dp))
+                    }
+                    Text(
+                        group.label,
+                        style = if (isCompact) MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp) else MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 if (!isCompact) {
                     Text(
                         subtitle,
@@ -919,6 +1017,23 @@ private fun ProcessRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+
+            if (group.processes.size > 1) {
+                Box(
+                    Modifier
+                        .size(if (isCompact) 20.dp else 26.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onToggleExpand),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
+                        contentDescription = if (expanded) "Collapse subprocesses" else "Show subprocesses",
+                        tint = if (expanded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(if (isCompact) 14.dp else 18.dp),
                     )
                 }
             }
@@ -987,6 +1102,158 @@ private fun ProcessRow(
     }
 }
 
+@Composable
+private fun SubprocessRow(
+    group: ProcessGroup,
+    process: ProcessInfo,
+    totalMemory: Long,
+    horizontalScrollState: ScrollState,
+    isCompact: Boolean,
+    onClick: () -> Unit,
+) {
+    val heat = LocalMetricPalette.current.heat
+    val subLabel = when {
+        group.packageName != null && process.name == group.packageName -> "main"
+        group.packageName != null && process.name.startsWith("${group.packageName}:") ->
+            ":${process.name.substringAfter(':')}"
+        else -> process.name.substringAfterLast('/')
+    }
+    val fontSize = if (isCompact) 9.5.sp else 11.sp
+    val swapFontSize = if (isCompact) 8.5.sp else 9.5.sp
+    val subStyle = MaterialTheme.typography.bodySmall.copy(
+        fontSize = fontSize,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.55f))
+            .clickable(onClick = onClick)
+            .padding(start = if (isCompact) 4.dp else 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Row(
+            Modifier
+                .width(getNameColumnWidth(isCompact))
+                .padding(
+                    start = if (isCompact) 20.dp else 36.dp,
+                    top = if (isCompact) 2.dp else 4.dp,
+                    bottom = if (isCompact) 2.dp else 4.dp,
+                    end = 4.dp,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "└",
+                style = subStyle,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                subLabel,
+                style = subStyle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Row(
+            Modifier.horizontalScroll(horizontalScrollState),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SubHeatCell(
+                text = formatPercentFine(process.cpu),
+                background = heat.copy(alpha = heatAlpha(process.cpu / 25f) * 0.6f),
+                width = getCpuColumnWidth(isCompact),
+                isCompact = isCompact,
+                fontSize = fontSize,
+            )
+
+            val memoryShare = if (totalMemory > 0) (process.rssBytes + process.swapBytes).toFloat() / totalMemory else 0f
+            Box(
+                Modifier
+                    .width(getMemoryColumnWidth(isCompact))
+                    .fillMaxHeight()
+                    .background(heat.copy(alpha = heatAlpha(memoryShare * 8f) * 0.6f))
+                    .padding(end = if (isCompact) 4.dp else 10.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        formatBytes(process.rssBytes),
+                        style = subStyle.tabular,
+                    )
+                    if (process.swapBytes > 0) {
+                        Text(
+                            "+${formatBytes(process.swapBytes)}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = swapFontSize).tabular,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
+            SubHeatCell(
+                text = if (process.gpu > 0f) formatPercentFine(process.gpu) else "0%",
+                background = heat.copy(alpha = heatAlpha(process.gpu / 25f) * 0.6f),
+                width = getGpuColumnWidth(isCompact),
+                isCompact = isCompact,
+                fontSize = fontSize,
+            )
+
+            SubHeatCell(
+                text = process.powerMw?.let { formatPower(it / 1000f) } ?: "—",
+                background = Color.Transparent,
+                width = getPowerColumnWidth(isCompact),
+                isCompact = isCompact,
+                fontSize = fontSize,
+            )
+
+            SubHeatCell(
+                text = process.threads.toString(),
+                background = Color.Transparent,
+                width = getThreadsColumnWidth(isCompact),
+                isCompact = isCompact,
+                fontSize = fontSize,
+            )
+
+            SubHeatCell(
+                text = process.pid.toString(),
+                background = Color.Transparent,
+                width = getPidColumnWidth(isCompact),
+                isCompact = isCompact,
+                fontSize = fontSize,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubHeatCell(
+    text: String,
+    background: Color,
+    width: Dp,
+    isCompact: Boolean,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+) {
+    Box(
+        Modifier.width(width).fillMaxHeight().background(background),
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = fontSize,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            ).tabular,
+            modifier = Modifier.padding(end = if (isCompact) 4.dp else 10.dp),
+        )
+    }
+}
+
 private fun heatAlpha(intensity: Float): Float = 0.05f + 0.40f * intensity.coerceIn(0f, 1f)
 
 @Composable
@@ -1047,7 +1314,18 @@ private fun ProcessDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(group.label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (group.isPrivateSpace) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(PrivateSpaceDotColor))
+                    Spacer(Modifier.width(8.dp))
+                } else if (group.userId > 0) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(SecondaryProfileDotColor))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(group.label, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+        },
         text = {
             Column(
                 modifier = Modifier
@@ -1056,6 +1334,14 @@ private fun ProcessDialog(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 group.packageName?.let { KeyValue("Package", it) }
+                if (group.userId > 0) {
+                    val profileText = if (group.isPrivateSpace) {
+                        "Private space (User ${group.userId})"
+                    } else {
+                        "${group.profileName ?: "Secondary"} (User ${group.userId})"
+                    }
+                    KeyValue("Profile", profileText)
+                }
                 KeyValue("CPU", formatPercentFine(group.cpu))
                 KeyValue("RAM", formatBytes(group.rssBytes))
                 if (group.swapBytes > 0) {

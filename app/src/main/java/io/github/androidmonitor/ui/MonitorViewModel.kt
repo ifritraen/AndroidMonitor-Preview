@@ -48,7 +48,6 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(2_000), ProcessListState.Loading)
 
     fun loadInstalledApps() {
-        if (_installedApps.value.isNotEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             _installedApps.value = apps.installedApps()
         }
@@ -109,7 +108,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         val lockedKeys = settings.lockedProcesses.value
         val exempt = mutableSetOf(app.packageName)
         for (key in pinnedKeys + lockedKeys) {
-            if (key.startsWith("pkg:")) exempt.add(key.removePrefix("pkg:"))
+            if (key.startsWith("pkg:")) {
+                val raw = key.removePrefix("pkg:")
+                exempt.add(if (':' in raw) raw.substringAfter(':') else raw)
+            }
         }
         viewModelScope.launch {
             val freed = processSampler.reduceSwap(targetPackages, exempt)
